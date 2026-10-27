@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>co.easytier.report</string>
+  <key>ProgramArguments</key><array><string>/usr/local/bin/et-report.sh</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>ET_HUB_URL</key><string>https://et.example.com</string>
+    <key>ET_REPORT_TOKEN</key><string>REPLACE_ME</string>
+    <key>ET_REPORTER</key><string>mac-mini</string>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/et-report.err</string>
+</dict></plist>

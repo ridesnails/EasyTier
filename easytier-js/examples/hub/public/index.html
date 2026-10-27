@@ -1,0 +1,58 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EasyTier Hub</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--mut:#6b7280;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#171b23;--fg:#e5e7eb;--mut:#9ca3af}}
+body{margin:0;font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:1100px;margin:auto;padding:24px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.card{background:var(--card);border-radius:12px;padding:14px 16px;color:var(--mut)}
+.card b{display:block;font-size:22px;color:var(--fg)}
+.wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #8882;white-space:nowrap}
+th{color:var(--mut);font-weight:500}
+.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.bad{color:var(--bad)!important}
+</style></head><body><main>
+<h2>EasyTier Hub</h2>
+<div class="cards">
+  <div class="card">Relay<b id="relay">-</b><span id="conn"></span></div>
+  <div class="card">节点数<b id="count">-</b></div>
+  <div class="card">数据来源<b id="src">-</b><span id="age"></span></div>
+</div>
+<div class="wrap"><table>
+<thead><tr><th>虚拟 IP</th><th>主机名</th><th>连接</th><th>延迟 ms</th><th>丢包</th><th>收 / 发</th><th>协议</th><th>NAT</th></tr></thead>
+<tbody id="rows"></tbody></table></div>
+</main><script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'-').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const list=x=>Array.isArray(x)?x:(x?.peers??x?.items??[]);
+const pick=(o,...ks)=>{for(const k of ks){if(o?.[k]!=null&&o[k]!=='')return o[k]}return '-'};
+async function tick(){
+  try{
+    const r=await fetch('/api/peers',{cache:'no-store'});
+    const j=await r.json();
+    const cur=(j.reporters||[]).sort((a,b)=>b.at-a.at)[0];
+    if(!cur){$('src').textContent='暂无上报';return}
+    const age=Math.round((j.now-cur.at)/1000);
+    $('src').textContent=cur.reporter;
+    $('age').textContent=age>45?`数据已过期（${age}s）`:`${age}s 前更新`;
+    $('age').className=age>45?'warn':'';
+    const h=cur.relay||{};
+    $('relay').textContent=h.ok?h.state:'down';
+    $('relay').className=h.ok?'ok':'bad';
+    $('conn').textContent=h.ok?`${h.connections} 条 wss 连接`:'';
+    const peers=list(cur.data?.peers);
+    $('count').textContent=peers.length;
+    $('rows').innerHTML=peers.map(p=>{
+      const c=String(pick(p,'cost'));
+      const cls=c.includes('p2p')?'ok':c.toLowerCase().includes('relay')?'warn':'';
+      return `<tr><td>${esc(pick(p,'ipv4','virtual_ipv4'))}</td><td>${esc(pick(p,'hostname'))}</td>
+<td class="${cls}">${esc(c)}</td><td>${esc(pick(p,'lat_ms'))}</td><td>${esc(pick(p,'loss_rate'))}</td>
+<td>${esc(pick(p,'rx_bytes'))} / ${esc(pick(p,'tx_bytes'))}</td><td>${esc(pick(p,'tunnel_proto'))}</td>
+<td>${esc(pick(p,'nat_type'))}</td></tr>`}).join('');
+  }catch(e){$('src').textContent='拉取失败'}
+}
+tick();setInterval(tick,10000);
+</script></body></html>

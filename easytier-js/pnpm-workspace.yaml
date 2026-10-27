@@ -3,6 +3,7 @@ packages:
   - 'browser'
   - 'cloudflare'
   - 'examples/web'
+  - 'examples/hub'
 
 overrides:
   minimatch: 10.2.4

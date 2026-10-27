@@ -1,0 +1,13 @@
+[Unit]
+Description=EasyTier Hub reporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/et-report.env
+ExecStart=/usr/local/bin/et-report.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

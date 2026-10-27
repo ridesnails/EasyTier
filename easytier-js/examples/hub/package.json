@@ -1,0 +1,1 @@
+{"dependencies":{"@easytier/cloudflare":"workspace:*"},"devDependencies":{"typescript":"5.9.3","wrangler":"4.134.0"},"name":"@easytier/hub-example","private":true,"scripts":{"deploy":"wrangler deploy","dev":"wrangler dev","types":"wrangler types"},"type":"module","version":"0.1.0"}
