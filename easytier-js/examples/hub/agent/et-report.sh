@@ -6,7 +6,7 @@ set -euo pipefail
 ET_CLI="${ET_CLI:-easytier-cli}"
 ET_RPC="${ET_RPC:-127.0.0.1:15888}"
 ET_REPORTER="${ET_REPORTER:-$(hostname -s)}"
-ET_INTERVAL="${ET_INTERVAL:-15}"
+ET_INTERVAL="${ET_INTERVAL:-120}"
 
 report_once() {
   local peers node

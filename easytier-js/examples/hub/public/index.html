@@ -1,121 +1,1893 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EasyTier Hub</title>
-<style>
-:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--mut:#6b7280;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1218;--card:#171b23;--fg:#e5e7eb;--mut:#9ca3af}}
-body{margin:0;font:14px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
-main{max-width:1100px;margin:auto;padding:24px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
-.card{background:var(--card);border-radius:12px;padding:14px 16px;color:var(--mut)}
-.card b{display:block;font-size:22px;color:var(--fg)}
-.wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden}
-th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #8882;white-space:nowrap}
-th{color:var(--mut);font-weight:500}
-.ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.bad{color:var(--bad)!important}
-.tabs{display:flex;gap:8px;margin:4px 0 16px}.tabs button{border:1px solid #8884;background:var(--card);color:var(--mut);border-radius:999px;padding:6px 14px;cursor:pointer;font:inherit}.tabs button.on{color:var(--fg);border-color:var(--ok)}select{background:var(--card);color:var(--fg);border:1px solid #8884;border-radius:8px;padding:6px 8px;font:inherit}
-</style></head><body><main>
-<h2>EasyTier Hub</h2>
-<div class="tabs"><button data-tab="live" class="on">实时</button><button data-tab="hist">历史</button><button data-tab="events">事件</button></div>
-<section id="view-live"><div class="cards">
-  <div class="card">Relay<b id="relay">-</b><span id="conn"></span></div>
-  <div class="card">节点数<b id="count">-</b></div>
-  <div class="card">数据来源<b id="src">-</b><span id="age"></span></div>
-</div>
-<div class="wrap"><table>
-<thead><tr><th>虚拟 IP</th><th>主机名</th><th>连接</th><th>延迟 ms</th><th>丢包</th><th>收 / 发</th><th>协议</th><th>NAT</th></tr></thead>
-<tbody id="rows"></tbody></table></div></section>
-<section id="view-hist" hidden><div class="cards">
-  <div class="card">上报者<select id="hist-rep"></select><span id="hist-state"></span></div>
-  <div class="card">历史条数<b id="hist-n">-</b><span id="hist-range"></span></div>
-  <div class="card">在线状态<b id="hist-online">-</b><span id="hist-dur"></span></div>
-</div>
-<div class="wrap"><table>
-<thead><tr><th>虚拟 IP</th><th>主机名</th><th>首次出现</th><th>最后出现</th><th>平均延迟 ms</th><th>收 / 发</th><th>速率 收/发</th></tr></thead>
-<tbody id="hist-rows"></tbody></table></div></section>
-<section id="view-events" hidden><div class="wrap"><table>
-<thead><tr><th>时间</th><th>类型</th><th>虚拟 IP</th><th>主机名</th><th>上报者</th></tr></thead>
-<tbody id="evt-rows"></tbody></table></div></section>
-</main><script>
-const $=id=>document.getElementById(id);
-const esc=s=>String(s??'-').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const list=x=>Array.isArray(x)?x:(x?.peers??x?.items??[]);
-const pick=(o,...ks)=>{for(const k of ks){if(o?.[k]!=null&&o[k]!=='')return o[k]}return '-'};
-async function tick(){
-  try{
-    const r=await fetch('/api/peers',{cache:'no-store'});
-    const j=await r.json();
-    const cur=(j.reporters||[]).sort((a,b)=>b.at-a.at)[0];
-    if(!cur){$('src').textContent='暂无上报';return}
-    const age=Math.round((j.now-cur.at)/1000);
-    $('src').textContent=cur.reporter;
-    $('age').textContent=age>45?`数据已过期（${age}s）`:`${age}s 前更新`;
-    $('age').className=age>45?'warn':'';
-    const h=cur.relay||{};
-    $('relay').textContent=h.ok?h.state:'down';
-    $('relay').className=h.ok?'ok':'bad';
-    $('conn').textContent=h.ok?`${h.connections} 条 wss 连接`:'';
-    const peers=list(cur.data?.peers);
-    $('count').textContent=peers.length;
-    $('rows').innerHTML=peers.map(p=>{
-      const c=String(pick(p,'cost'));
-      const cls=c.includes('p2p')?'ok':c.toLowerCase().includes('relay')?'warn':'';
-      return `<tr><td>${esc(pick(p,'ipv4','virtual_ipv4'))}</td><td>${esc(pick(p,'hostname'))}</td>
-<td class="${cls}">${esc(c)}</td><td>${esc(pick(p,'lat_ms'))}</td><td>${esc(pick(p,'loss_rate'))}</td>
-<td>${esc(pick(p,'rx_bytes'))} / ${esc(pick(p,'tx_bytes'))}</td><td>${esc(pick(p,'tunnel_proto'))}</td>
-<td>${esc(pick(p,'nat_type'))}</td></tr>`}).join('');
-  }catch(e){$('src').textContent='拉取失败'}
-}
-const fmtT=t=>new Date(t).toLocaleString();
-const fmtB=n=>{if(n==null)return '-';const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toFixed(n>=100||i===0?0:1)+' '+u[i]};
-const fmtR=n=>n==null?'-':fmtB(n)+'/s';
-async function loadHist(){
-  try{
-    const pr=await (await fetch('/api/peers',{cache:'no-store'})).json();
-    const reps=(pr.reporters||[]).sort((a,b)=>b.at-a.at);
-    const sel=$('hist-rep');
-    const cur=sel.value;
-    sel.innerHTML=reps.map(r=>`<option>${esc(r.reporter)}</option>`).join('')||'<option value="">（暂无上报者）</option>';
-    if(reps.some(r=>r.reporter===cur))sel.value=cur;
-    const rep=sel.value;
-    if(!rep){$('hist-state').textContent='暂无上报';$('hist-n').textContent='-';$('hist-online').textContent='-';$('hist-rows').innerHTML='';return}
-    const j=await (await fetch('/api/history?reporter='+encodeURIComponent(rep)+'&limit=1000',{cache:'no-store'})).json();
-    const es=j.entries||[];
-    $('hist-n').textContent=es.length;
-    $('hist-range').textContent=es.length?`${fmtT(es[0].at)} ~ ${fmtT(es[es.length-1].at)}`:'';
-    $('hist-state').textContent='';
-    if(!es.length){$('hist-online').textContent='无数据';$('hist-rows').innerHTML='';return}
-    const last=es[es.length-1], age=Math.round((j.now-last.at)/1000);
-    $('hist-online').textContent=age>300?'离线':age>45?'数据已过期':'在线';
-    $('hist-online').className=age>300?'bad':age>45?'warn':'ok';
-    $('hist-dur').textContent=`最近上报 ${age}s 前`;
-    const agg={};
-    for(const e of es)for(const p of (e.peers||[])){
-      const a=agg[p.id]||(agg[p.id]={id:p.id,host:p.hostname,first:e.at,last:e.at,lat:[],rx:p.rx,tx:p.tx,rr:p.rx_rate,tr:p.tx_rate});
-      a.last=e.at;if(p.lat!=null)a.lat.push(p.lat);a.rx=p.rx;a.tx=p.tx;a.rr=p.rx_rate;a.tr=p.tx_rate;
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EasyTier Hub</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
-    $('hist-rows').innerHTML=Object.values(agg).map(a=>{
-      const avg=a.lat.length?Math.round(a.lat.reduce((x,y)=>x+y,0)/a.lat.length):'-';
-      return `<tr><td>${esc(a.id)}</td><td>${esc(a.host)}</td><td>${fmtT(a.first)}</td><td>${fmtT(a.last)}</td><td>${avg}</td><td>${fmtB(a.rx)} / ${fmtB(a.tx)}</td><td>${fmtR(a.rr)} / ${fmtR(a.tr)}</td></tr>`}).join('');
-  }catch(e){$('hist-state').textContent='拉取失败'}
-}
-const evtName=t=>({join:'上线',leave:'离线',ip_change:'IP 变化'}[t]||t);
-async function loadEvents(){
-  try{
-    const j=await (await fetch('/api/events?limit=200',{cache:'no-store'})).json();
-    $('evt-rows').innerHTML=(j.events||[]).map(e=>{
-      const cls=e.type==='join'?'ok':e.type==='leave'?'bad':'warn';
-      return `<tr><td>${fmtT(e.at)}</td><td class="${cls}">${evtName(e.type)}</td><td>${esc(e.ip)}</td><td>${esc(e.hostname)}</td><td>${esc(e.reporter)}</td></tr>`}).join('')||'<tr><td colspan="5">暂无事件（需节点先上报）</td></tr>';
-  }catch(e){$('evt-rows').innerHTML='<tr><td colspan="5">拉取失败</td></tr>'}
-}
-$('hist-rep').onchange=loadHist;
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
-  for(const v of ['live','hist','events'])$( 'view-'+v).hidden=v!==b.dataset.tab;
-  if(b.dataset.tab==='hist')loadHist();
-  if(b.dataset.tab==='events')loadEvents();
-});
-tick();setInterval(tick,10000);
-setInterval(()=>{if(!$('view-hist').hidden)loadHist();if(!$('view-events').hidden)loadEvents()},30000);
-</script></body></html>
+    .font-mono-num {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      70% { transform: scale(1.75); opacity: 0; }
+      100% { transform: scale(1.75); opacity: 0; }
+    }
+    .status-dot-pulse::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 9999px;
+      background-color: inherit;
+      animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    /* Theme-adaptive SVG Map styles (synced with webpage Light/Dark mode) */
+    :root {
+      --map-bg-start: #f8fafc;
+      --map-bg-end: #eff6ff;
+      --map-dot-land: #cbd5e1;
+      --map-dot-ocean: #e2e8f0;
+      --map-node-title: #0f172a;
+      --map-node-sub: #475569;
+      --map-pill-bg: rgba(255, 255, 255, 0.94);
+      --map-pill-shadow: rgba(15, 23, 42, 0.08);
+      --map-label-halo: rgba(255, 255, 255, 0.92);
+    }
+    html.dark {
+      --map-bg-start: #0d1424;
+      --map-bg-end: #080c14;
+      --map-dot-land: #29384e;
+      --map-dot-ocean: #141d2b;
+      --map-node-title: #f8fafc;
+      --map-node-sub: #94a3b8;
+      --map-pill-bg: rgba(11, 16, 28, 0.92);
+      --map-pill-shadow: rgba(0, 0, 0, 0.45);
+      --map-label-halo: rgba(8, 12, 20, 0.92);
+    }
+    @keyframes dash-flow {
+      to { stroke-dashoffset: -48; }
+    }
+    .map-arc-flow {
+      stroke-dasharray: 4 20;
+      animation: dash-flow 1.8s linear infinite;
+    }
+    @keyframes node-breathe {
+      0%, 100% { r: 12px; opacity: 0.22; }
+      50% { r: 16px; opacity: 0.38; }
+    }
+    .map-node-halo {
+      animation: node-breathe 2.6s ease-in-out infinite;
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(156, 163, 175, 0.5); }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-[#090b10] dark:text-slate-100 min-h-screen flex flex-col transition-colors duration-200 selection:bg-indigo-500/20 selection:text-indigo-500">
+
+  <!-- Top Ambient Glow -->
+  <div class="pointer-events-none fixed inset-x-0 top-0 h-64 bg-gradient-to-b from-indigo-500/5 via-sky-500/5 to-transparent dark:from-indigo-500/10 dark:via-cyan-500/5 dark:to-transparent z-0"></div>
+
+  <!-- Header Navigation -->
+  <header class="sticky top-0 z-30 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/85 dark:bg-[#0d1017]/85 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
+      <!-- Brand -->
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-9 h-9 shrink-0" title="EasyTier">
+          <svg viewBox="0 0 128 128" class="w-9 h-9" fill="none" aria-label="EasyTier">
+            <circle cx="64" cy="64" r="46" stroke="#5b9bff" stroke-width="7" />
+            <ellipse cx="64" cy="64" rx="28" ry="15" stroke="#5b9bff" stroke-width="5" />
+            <circle cx="64" cy="64" r="9" fill="#5b9bff" />
+            <circle cx="64" cy="14" r="11" fill="#5b9bff" />
+            <circle cx="18" cy="108" r="11" fill="#5b9bff" />
+            <circle cx="110" cy="108" r="11" fill="#5b9bff" />
+            <path d="M64 64 L104 100" stroke="#5b9bff" stroke-width="5" stroke-linecap="round" />
+          </svg>
+        </div>
+        <div class="truncate">
+          <h1 class="text-base font-extrabold tracking-tight truncate" style="background:linear-gradient(90deg,#34d399,#a3e635 45%,#facc15);-webkit-background-clip:text;background-clip:text;color:transparent;">EasyTier Hub</h1>
+        </div>
+      </div>
+
+      <!-- Right Controls -->
+      <div class="flex items-center gap-2 sm:gap-2.5 shrink-0">
+        <!-- Live status badge (read-only: no demo mode any more) -->
+        <div class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-slate-100 text-slate-700 border-slate-200/80 dark:bg-slate-800/70 dark:text-slate-300 dark:border-slate-700/70" title="数据来源：同域 /api/peers 实时接口">
+          <span id="modeDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+          <span id="modeLabel">等待实时数据</span>
+        </div>
+
+        <!-- Reporter Selector -->
+        <div class="relative hidden md:block">
+          <select id="reporterSelect" aria-label="选择上报源节点" class="appearance-none bg-slate-100 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-lg pl-3 pr-7 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer">
+            <option value="__latest__">最新上报节点</option>
+          </select>
+          <svg class="w-3.5 h-3.5 text-slate-400 pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+
+        <!-- Refresh Button -->
+        <button id="btnRefresh" type="button" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs" title="立即刷新节点状态">
+          <svg id="refreshIcon" class="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 transition-transform duration-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span class="hidden sm:inline" id="countdownText">10s</span>
+        </button>
+
+        <!-- Logout -->
+        <button id="btnLogout" type="button" class="p-2 rounded-lg border border-slate-200/80 dark:border-slate-700/70 bg-white dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" aria-label="退出登录" title="退出登录">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+        </button>
+
+        <!-- Theme Toggle -->
+        <button id="btnTheme" type="button" class="p-2 rounded-lg border border-slate-200/80 dark:border-slate-700/70 bg-white dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" aria-label="切换深浅色主题" title="切换深色/浅色模式（地图同步切换）">
+          <svg id="iconSun" class="w-4 h-4 hidden dark:block text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+          <svg id="iconMoon" class="w-4 h-4 block dark:hidden text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- Demo Fallback Notice Banner -->
+    <div id="errorBanner" class="hidden rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-800 dark:text-rose-300 flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span id="errorBannerText">实时接口连接失败，已保留上一份真实数据，不会用演示数据代替。</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btnRetryLive" type="button" class="px-2.5 py-1 rounded-md font-medium bg-rose-500/20 hover:bg-rose-500/30 text-rose-900 dark:text-rose-200 transition-colors">
+          重新拉取 /api/peers
+        </button>
+      </div>
+    </div>
+
+    <!-- Top KPI Cards Grid -->
+    <section aria-label="核心状态指标" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Card 1: Relay Status -->
+      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Relay 状态</span>
+          <span class="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline justify-between gap-2">
+          <div class="flex items-center gap-2.5">
+            <span id="relayDot" class="relative w-2.5 h-2.5 rounded-full bg-emerald-500 status-dot-pulse"></span>
+            <b id="relay" class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">-</b>
+          </div>
+          <span id="conn" class="text-xs font-mono-num px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">—</span>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60 text-[11px] text-slate-500 dark:text-slate-400">
+          <span id="relayEndpoint" class="font-mono">wss://et.yi.uy/relay</span>
+        </div>
+      </div>
+
+      <!-- Card 2: Node Count & P2P Ratio -->
+      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">节点数 (Peers)</span>
+          <span class="p-2 rounded-lg bg-indigo-500/10 text-indigo-500">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline justify-between">
+          <b id="count" class="text-2xl font-bold font-mono-num tracking-tight text-slate-900 dark:text-white">0</b>
+          <span id="p2pRateBadge" class="text-xs font-medium text-slate-500 dark:text-slate-400">p2p 直连率 -</span>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60">
+          <div class="w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
+            <div id="barP2P" class="bg-emerald-500 h-full transition-all duration-300" style="width: 0%"></div>
+            <div id="barRelay" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%"></div>
+            <div id="barLocal" class="bg-indigo-500 h-full transition-all duration-300" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 3: Network Telemetry -->
+      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">组网延迟与吞吐</span>
+          <span class="p-2 rounded-lg bg-cyan-500/10 text-cyan-500">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline justify-between">
+          <div class="flex items-baseline gap-1">
+            <b id="avgLat" class="text-2xl font-bold font-mono-num tracking-tight text-slate-900 dark:text-white">-</b>
+            <span class="text-xs text-slate-500 dark:text-slate-400">ms</span>
+          </div>
+          <span id="avgLoss" class="text-xs font-mono-num px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">丢包 -</span>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+          <span>上报视角累计收发 (rx / tx)</span>
+          <span id="totalTraffic" class="font-mono-num text-slate-700 dark:text-slate-300">- / -</span>
+        </div>
+      </div>
+
+      <!-- Card 4: Data Source & Freshness -->
+      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">数据来源 (Reporter)</span>
+          <span class="p-2 rounded-lg bg-violet-500/10 text-violet-500">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </span>
+        </div>
+        <div class="mt-3 flex items-baseline justify-between gap-2">
+          <b id="src" class="text-xl font-bold tracking-tight text-slate-900 dark:text-white truncate" title="上报节点标识">暂无上报</b>
+          <span id="age" class="text-xs font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 shrink-0">等待节点上报</span>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60 text-[11px] text-slate-500 dark:text-slate-400">
+          <span>上报源数量: <strong id="reporterCount" class="font-mono-num text-slate-700 dark:text-slate-300">0</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Lightweight Coarse-Dot SVG WAN IP Topology Map (Theme-Synced with Page) -->
+    <section aria-label="节点拓扑图" class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 shadow-xs overflow-hidden transition-colors">
+      <!-- Map Header Toolbar -->
+      <div class="px-4 sm:px-6 py-3.5 border-b border-slate-200/70 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-teal-500 dark:bg-teal-400 shadow-[0_0_8px_rgba(20,184,166,0.6)]"></span>
+            <h2 class="text-sm font-semibold tracking-tight text-slate-900 dark:text-white">节点拓扑图</h2>
+          </div>
+        </div>
+
+        <!-- Map Controls -->
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Region Preset Buttons -->
+          <div class="inline-flex rounded-lg p-0.5 bg-slate-200/70 dark:bg-slate-800/90 border border-slate-300/60 dark:border-slate-700/70 text-[11px]">
+            <button type="button" data-map-preset="auto" class="map-preset-btn px-2.5 py-1 rounded-md font-medium bg-indigo-600 text-white shadow-2xs transition-colors">
+              自适应聚焦
+            </button>
+            <button type="button" data-map-preset="world" class="map-preset-btn px-2.5 py-1 rounded-md font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors">
+              全球视图
+            </button>
+          </div>
+
+          <!-- Collapse Map Toggle -->
+          <button id="btnToggleMap" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/70 transition-colors">
+            收起地图
+          </button>
+        </div>
+      </div>
+
+      <!-- Map SVG Viewport Container -->
+      <div id="mapBodyWrap" class="relative w-full select-none overflow-hidden transition-colors" style="height: 420px;">
+        <svg id="geoMapCanvas" viewBox="0 0 1000 420" preserveAspectRatio="xMidYMid slice" class="w-full h-full block cursor-grab active:cursor-grabbing" style="background: radial-gradient(circle at 50% 45%, var(--map-bg-start), var(--map-bg-end));">
+          <defs>
+            <filter id="nodeGlow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="3.5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <!-- Layer 1: Coarse Dot-Matrix Land Grid -->
+          <g id="svgLandDots"></g>
+          <!-- Layer 0: Simplified country outlines, filled with flag -->
+          <g id="svgCountries"></g>
+          <!-- Layer 2: Curved Network Arcs & Animated Flow -->
+          <g id="svgLinks"></g>
+          <!-- Layer 3: Arc Pill Badges -->
+          <g id="svgPills"></g>
+          <!-- Layer 4: Glowing Nodes & City Labels -->
+          <g id="svgNodes"></g>
+        </svg>
+
+        <!-- Unlocated nodes: real peers without coordinates are listed here, never guessed onto the map -->
+        <div id="unlocatedWrap" class="hidden border-t border-slate-200/70 dark:border-slate-800/80 px-4 sm:px-6 py-3 text-xs text-slate-600 dark:text-slate-300">
+          <span class="font-medium text-slate-800 dark:text-slate-200">未定位节点（无上报坐标、未手动标注，不在地图上显示）：</span>
+          <span id="unlocatedList"></span>
+        </div>
+
+        <!-- Floating Zoom & Reset Controls (Bottom Right) -->
+        <div class="absolute bottom-3.5 right-4 flex items-center gap-1 bg-white/90 dark:bg-[#0e1422]/90 backdrop-blur-md border border-slate-200/90 dark:border-slate-800/90 rounded-xl p-1 shadow-md">
+          <button id="btnZoomIn" type="button" class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-mono text-sm" title="放大地图">+</button>
+          <button id="btnZoomOut" type="button" class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-mono text-sm" title="缩小地图">−</button>
+          <button id="btnZoomReset" type="button" class="px-2 h-7 rounded-lg flex items-center justify-center text-[11px] text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title="重置视野">重置</button>
+        </div>
+
+        <!-- Floating Legend (Bottom Left) -->
+        <div class="absolute bottom-3.5 left-4 hidden sm:flex flex-wrap items-center gap-3.5 bg-white/90 dark:bg-[#0e1422]/85 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 rounded-xl px-3.5 py-2 text-[11px] text-slate-600 dark:text-slate-300 pointer-events-none shadow-xs">
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#14b8a6]"></span> Local (本机上报节点)
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#10b981]"></span> p2p (udp / quic 直连)
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#a855f7]"></span> p2p (wg / tcp 直连)
+          </span>
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#f59e0b]"></span> relay (wss 中继转发)
+          </span>
+          <span class="text-slate-400 dark:text-slate-500">拖拽平移 · 滚轮缩放 · 点击节点查看详情</span>
+        </div>
+
+        <!-- Hover Tooltip on Map -->
+        <div id="mapTooltip" class="pointer-events-none absolute z-20 hidden rounded-xl bg-white/95 dark:bg-[#0d1322]/95 border border-slate-200 dark:border-slate-700/80 px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 shadow-xl backdrop-blur-md min-w-[210px]"></div>
+      </div>
+    </section>
+
+    <!-- Main Peers Section -->
+    <section class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 shadow-xs overflow-hidden transition-colors">
+      <!-- Toolbar: Filters, Search & View Toggle -->
+      <div class="p-4 sm:px-6 border-b border-slate-200/70 dark:border-slate-800/80 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3.5">
+        <!-- Left: Filter Tabs -->
+        <div class="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
+          <button type="button" data-filter="all" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-indigo-600 text-white shadow-2xs">
+            全部 <span id="tabCountAll" class="ml-1 opacity-80 font-mono-num">0</span>
+          </button>
+          <button type="button" data-filter="p2p" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800">
+            P2P 直连 <span id="tabCountP2p" class="ml-1 opacity-75 font-mono-num">0</span>
+          </button>
+          <button type="button" data-filter="relay" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800">
+            Relay 中继 <span id="tabCountRelay" class="ml-1 opacity-75 font-mono-num">0</span>
+          </button>
+          <button type="button" data-filter="local" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800">
+            本机节点 <span id="tabCountLocal" class="ml-1 opacity-75 font-mono-num">0</span>
+          </button>
+        </div>
+
+        <!-- Right: Search Input & View Switcher -->
+        <div class="flex items-center gap-2.5">
+          <div class="relative flex-1 sm:w-72">
+            <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input id="searchInput" type="text" placeholder="搜索虚拟 IP、主机名、协议、NAT..." class="w-full pl-9 pr-14 py-1.5 text-xs rounded-lg bg-slate-100 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:bg-white dark:focus:bg-slate-800 transition-all">
+            <kbd class="hidden sm:inline-block absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded">/</kbd>
+          </div>
+
+          <!-- View Switcher: Table vs Grid Cards -->
+          <div class="inline-flex rounded-lg p-0.5 bg-slate-100 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/70">
+            <button id="btnViewTable" type="button" class="px-2.5 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-2xs transition-all" title="表格视图">
+              表格
+            </button>
+            <button id="btnViewCards" type="button" class="px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-all" title="卡片视图">
+              卡片
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Table View -->
+      <div id="tableViewWrap" class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="border-b border-slate-200/70 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 select-none">
+              <th class="py-3 px-4 sm:px-6 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" data-sort="ipv4">
+                <div class="inline-flex items-center gap-1">虚拟 IP <span class="sort-indicator" data-col="ipv4"></span></div>
+              </th>
+              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" data-sort="hostname">
+                <div class="inline-flex items-center gap-1">主机名 <span class="sort-indicator" data-col="hostname"></span></div>
+              </th>
+              <th class="py-3 px-4">WAN IP / 地区</th>
+              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" data-sort="cost">
+                <div class="inline-flex items-center gap-1">连接 (cost) <span class="sort-indicator" data-col="cost"></span></div>
+              </th>
+              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" data-sort="lat_ms">
+                <div class="inline-flex items-center gap-1">延迟 ms <span class="sort-indicator" data-col="lat_ms"></span></div>
+              </th>
+              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" data-sort="loss_rate">
+                <div class="inline-flex items-center gap-1">丢包 <span class="sort-indicator" data-col="loss_rate"></span></div>
+              </th>
+              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" data-sort="rx_bytes">
+                <div class="inline-flex items-center gap-1">收 / 发 <span class="sort-indicator" data-col="rx_bytes"></span></div>
+              </th>
+              <th class="py-3 px-4">协议</th>
+              <th class="py-3 px-4 sm:pr-6">NAT 类型</th>
+            </tr>
+          </thead>
+          <tbody id="rows" class="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm"></tbody>
+        </table>
+      </div>
+
+      <!-- Cards View -->
+      <div id="cardsViewWrap" class="hidden p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+
+      <!-- Empty State -->
+      <div id="emptyState" class="hidden py-14 px-4 text-center">
+        <div class="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800/80 text-slate-400 mx-auto flex items-center justify-center mb-3">
+          <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <p id="emptyStateTitle" class="text-sm font-medium text-slate-700 dark:text-slate-300">未找到匹配的组网节点</p>
+        <p id="emptyStateSub" class="text-xs text-slate-500 dark:text-slate-400 mt-1">请尝试清除搜索词或切换连接状态过滤条件</p>
+      </div>
+    </section>
+    <!-- Node Change Events (live /api/events) -->
+    <section class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 shadow-xs overflow-hidden transition-colors">
+      <div class="px-4 sm:px-6 py-3.5 border-b border-slate-200/70 dark:border-slate-800/80">
+        <h2 class="text-sm font-semibold tracking-tight text-slate-900 dark:text-white">节点变化事件</h2>
+      </div>
+      <div id="eventsList" class="px-4 sm:px-6 py-2"></div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="relative z-10 border-t border-slate-200/60 dark:border-slate-800/60 py-4 px-4 sm:px-6 lg:px-8 text-xs text-slate-500 dark:text-slate-400">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span class="font-medium text-slate-700 dark:text-slate-300">EasyTier Hub</span>
+        <span>·</span>
+        <span>EasyTier Hub</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Peer Details Modal -->
+  <div id="peerModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+    <div class="bg-white dark:bg-[#131824] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+          <h3 id="modalPeerTitle" class="text-sm font-semibold text-slate-900 dark:text-white">节点详情</h3>
+        </div>
+        <button id="btnClosePeerModal" type="button" class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div id="modalPeerGrid" class="grid grid-cols-2 gap-3 text-xs"></div>
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs font-medium text-slate-500 dark:text-slate-400">easytier-cli peer 原始上报 JSON</span>
+            <button id="btnCopyPeerJson" type="button" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-medium">复制 JSON</button>
+          </div>
+          <pre id="modalPeerRaw" class="p-3 rounded-xl bg-slate-900 text-slate-200 font-mono text-[11px] overflow-x-auto max-h-56 leading-relaxed"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WAN IP Geo Calibration & Custom Node Editor Modal -->
+  <div id="geoModal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+    <div class="bg-white dark:bg-[#131824] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden max-h-[88vh] flex flex-col">
+      <div class="px-6 py-4 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between shrink-0">
+        <div>
+          <h3 class="text-base font-semibold text-slate-900 dark:text-white">节点位置手动标注</h3>
+        </div>
+        <button id="btnCloseGeoModal" type="button" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="p-6 overflow-y-auto space-y-5 text-xs">
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <span class="font-semibold text-slate-800 dark:text-slate-200">当前 EasyTier 节点位置配置 (仅本浏览器本地保存)</span>
+            <button id="btnResetGeoOverrides" type="button" class="text-rose-500 hover:underline">恢复默认配置</button>
+          </div>
+          <div id="geoOverrideList" class="space-y-2.5"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s ?? '-').replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+
+    const list = x => Array.isArray(x) ? x : (x?.peers ?? x?.items ?? []);
+    const pick = (o, ...ks) => {
+      for (const k of ks) {
+        if (o?.[k] != null && o[k] !== '') return o[k];
+      }
+      return '-';
+    };
+
+    // =========================================================================
+    // 1. PRE-BAKED COARSE GEOGRAPHIC DOT GRID ([pac_lon, lat])
+    // =========================================================================
+    const COUNTRY_POLYS = {"CN":[[[127.66,49.76],[130.99,47.79],[132.51,47.79],[135.03,48.48],[133.1,45.14],[131.03,44.97],[131.14,42.93],[130.64,42.4],[129.99,42.99],[129.6,42.42],[128.05,41.99],[128.21,41.47],[126.87,41.82],[124.27,39.93],[122.13,39.17],[121.05,38.9],[121.64,40.95],[119.02,39.25],[118.04,39.2],[117.53,38.74],[119.7,37.16],[120.82,37.87],[122.36,37.45],[122.52,36.93],[121.1,36.65],[119.15,34.91],[121.91,31.69],[121.26,30.68],[122.09,29.83],[121.68,28.23],[121.13,28.14],[118.66,24.55],[115.89,22.78],[110.79,21.4],[110.44,20.34],[109.86,21.4],[107.04,21.81],[105.33,23.35],[101.65,22.32],[101.8,21.17],[101.27,21.2],[101.15,21.85],[99.24,22.12],[98.66,24.06],[97.6,23.9],[97.72,25.08],[98.67,25.92],[98.68,27.51],[96.25,28.41],[96.12,29.45],[94.57,29.28],[92.5,27.9],[90.02,28.3],[88.81,27.3],[88.73,28.09],[85.82,28.2],[78.74,31.52],[78.91,34.32],[76.19,35.9],[73.82,39.89],[75.47,40.56],[76.53,40.43],[76.9,41.07],[78.19,41.19],[80.12,42.12],[80.87,43.18],[79.97,44.92],[82.46,45.54],[83.18,47.33],[85.16,47.0],[85.77,48.46],[87.75,49.3],[90.97,46.89],[90.95,45.29],[95.31,44.24],[96.35,42.73],[100.85,42.66],[104.96,41.6],[110.41,42.87],[111.83,43.74],[111.87,45.1],[113.46,44.81],[115.99,45.73],[117.42,46.67],[119.66,46.69],[118.06,48.07],[115.49,48.14],[116.68,49.89],[117.88,49.51],[119.29,50.14],[121.0,53.25],[125.95,52.79],[127.66,49.76]],[[110.34,18.68],[109.48,18.2],[108.66,18.51],[109.12,19.82],[110.79,20.08],[110.34,18.68]]],"DE":[[[9.92,54.98],[10.94,54.01],[12.52,54.47],[14.35,53.25],[15.02,51.11],[12.24,50.27],[13.6,48.88],[12.93,47.47],[7.47,47.62],[8.1,49.02],[6.19,49.46],[6.91,53.48],[8.8,54.02],[8.53,54.96],[9.92,54.98]]],"FR":[[[3.59,50.38],[8.1,49.02],[6.04,46.73],[7.44,43.69],[6.53,43.13],[3.1,43.08],[2.99,42.47],[1.83,42.34],[-1.9,43.42],[-1.19,46.01],[-4.49,47.95],[-4.59,48.68],[-1.62,48.64],[-1.93,49.78],[-0.99,49.35],[2.51,51.15],[3.59,50.38]],[[9.56,42.15],[9.23,41.38],[8.54,42.26],[9.39,43.01],[9.56,42.15]]],"GB":[[[-3.01,58.63],[-4.07,57.55],[-1.96,57.68],[-3.12,55.97],[-2.09,55.91],[0.47,52.93],[1.68,52.74],[1.45,51.29],[-5.25,49.96],[-3.41,51.43],[-5.27,51.99],[-4.22,52.3],[-4.58,53.5],[-3.09,53.4],[-2.95,53.98],[-4.84,54.79],[-5.05,55.78],[-5.59,55.31],[-6.15,56.79],[-5.01,58.63],[-3.01,58.63]],[[-5.66,54.55],[-6.2,53.87],[-7.57,54.06],[-7.57,55.13],[-5.66,54.55]]],"JP":[[[140.98,37.14],[140.25,35.14],[137.22,34.61],[135.79,33.46],[135.08,34.6],[130.99,33.89],[132.0,33.15],[130.69,31.03],[129.41,33.3],[130.35,33.6],[132.62,35.43],[135.68,35.53],[136.72,37.3],[137.39,36.83],[138.86,37.83],[140.31,41.2],[141.91,39.99],[140.98,37.14]],[[143.91,44.17],[145.54,43.26],[144.06,42.99],[143.18,42.0],[141.61,42.68],[141.07,41.58],[139.96,41.57],[141.97,45.55],[143.91,44.17]],[[134.64,34.15],[134.2,33.2],[133.79,33.52],[133.01,32.7],[132.92,34.06],[134.64,34.15]]],"KR":[[[128.35,38.61],[129.09,35.08],[126.49,34.39],[126.17,37.75],[128.35,38.61]]],"NL":[[[6.07,53.51],[7.09,53.14],[6.16,50.8],[4.97,51.48],[3.31,51.35],[6.07,53.51]]],"US":[[[-94.82,49.39],[-94.33,48.67],[-89.6,48.01],[-88.38,48.3],[-84.14,46.51],[-82.55,45.35],[-82.69,41.68],[-74.87,45.0],[-71.51,45.01],[-69.24,47.45],[-67.79,47.07],[-66.96,44.81],[-70.12,43.68],[-70.83,42.34],[-69.97,41.64],[-73.71,40.93],[-71.94,40.93],[-73.95,40.75],[-74.91,38.94],[-75.53,39.5],[-75.94,37.22],[-76.35,39.15],[-76.99,38.24],[-75.73,35.55],[-81.34,31.44],[-80.38,25.21],[-81.17,25.2],[-81.71,25.87],[-82.93,29.1],[-84.1,30.09],[-85.11,29.64],[-86.4,30.4],[-89.18,30.32],[-89.41,29.16],[-93.23,29.78],[-94.69,29.48],[-97.14,27.83],[-97.53,25.84],[-99.02,26.37],[-100.96,29.38],[-102.48,29.76],[-103.11,28.97],[-103.94,29.27],[-106.51,31.75],[-111.02,31.33],[-114.72,32.72],[-117.13,32.54],[-118.52,34.03],[-120.62,34.61],[-124.4,40.31],[-124.57,48.38],[-123.12,48.04],[-122.59,47.1],[-122.84,49],[-94.82,49.39]],[[-155.07,71.15],[-154.34,70.7],[-152.21,70.83],[-150.74,70.43],[-143.59,70.15],[-140.99,69.71],[-141.0,60.31],[-139.04,60.0],[-137.45,58.91],[-135.48,59.79],[-130.01,55.92],[-130.54,54.8],[-134.08,58.12],[-136.63,58.21],[-139.87,59.54],[-142.57,60.08],[-143.96,60.0],[-147.11,60.88],[-151.72,59.16],[-150.62,61.28],[-158.43,55.99],[-164.79,54.4],[-157.04,58.92],[-161.97,58.67],[-166.12,61.5],[-160.78,64.79],[-164.96,64.45],[-168.11,65.67],[-163.65,66.58],[-163.79,66.08],[-161.68,66.12],[-166.76,68.36],[-155.07,71.15]],[[-155.54,19.08],[-156.07,19.7],[-155.22,19.99],[-155.54,19.08]],[[-153.01,57.12],[-154.01,56.73],[-152.56,57.9],[-153.01,57.12]],[[-165.58,59.91],[-166.19,59.75],[-165.67,60.29],[-165.58,59.91]],[[-171.73,63.78],[-168.69,63.3],[-169.53,62.98],[-171.73,63.78]]]};
+    const FLAG_FILES = {"DE":{"vb":"0 0 5 3","inner":"<path d=\"M0 0h5v3H0z\"/><path fill=\"#D00\" d=\"M0 1h5v2H0z\"/><path fill=\"#FFCE00\" d=\"M0 2h5v1H0z\"/>"},"FR":{"vb":"0 0 900 600","inner":"<path fill=\"#CE1126\" d=\"M0 0h900v600H0\"/><path fill=\"#fff\" d=\"M0 0h600v600H0\"/><path fill=\"#002654\" d=\"M0 0h300v600H0\"/>"},"NL":{"vb":"0 0 9 6","inner":"<path fill=\"#21468B\" d=\"M0 0h9v6H0z\"/><path fill=\"#FFF\" d=\"M0 0h9v4H0z\"/><path fill=\"#AE1C28\" d=\"M0 0h9v2H0z\"/>"},"JP":{"vb":"0 0 900 600","inner":"<path fill=\"#fff\" d=\"M0 0h900v600H0z\"/><circle fill=\"#bc002d\" cx=\"450\" cy=\"300\" r=\"180\"/>"},"CN":{"vb":"0 0 900 600","inner":"<path fill=\"#EE1C25\" d=\"M0 0h900v600H0\"/><g transform=\"matrix(3 0 0 3 150 150)\"><path id=\"cn-a\" fill=\"#FF0\" d=\"m0-30 17.634 54.27-46.166-33.54h57.064l-46.166 33.54Z\"/></g><use xlink:href=\"#cn-a\" transform=\"rotate(23.036 2.784 766.082)\"/><use xlink:href=\"#cn-a\" transform=\"rotate(45.87 38.201 485.396)\"/><use xlink:href=\"#cn-a\" transform=\"rotate(69.945 29.892 362.328)\"/><use xlink:href=\"#cn-a\" transform=\"rotate(20.66 -590.66 957.955)\"/>"},"KR":{"vb":"-72 -48 144 96","inner":"<path fill=\"#fff\" d=\"M-72-48v96H72v-96z\"/><g stroke=\"#000\" stroke-width=\"4\"><path d=\"M-34.946-37.72-48.26-17.75m4.992 3.328 13.313-19.97m4.992 3.329-13.312 19.969m63.236 42.157 6.101-9.152m1.11-1.664 6.101-9.153m4.993 3.328-6.102 9.153m-1.11 1.664-6.101 9.152m4.992 3.329 6.102-9.153m1.11-1.664 6.1-9.153M-48.259 17.75l13.313 19.97m4.992-3.329-6.102-9.152m-1.109-1.664-6.102-9.153m4.993-3.328 13.312 19.97m63.236-42.158-6.101-9.153m-1.11-1.664-6.101-9.152m4.992-3.328 13.313 19.969m4.992-3.328-6.102-9.153m-1.11-1.664-6.1-9.153\"/></g><path fill=\"#cd2e3a\" d=\"M9.985 6.656A18 18 0 1 1-19.97-13.313a24 24 0 1 1 39.938 26.626\"/><path fill=\"#0047a0\" d=\"M0 0a12 12 0 1 1 19.97 13.313 24 24 0 1 1-39.94-26.626A12 12 0 1 0 0 0\"/>"},"GB":{"vb":"0 0 60 30","inner":"<clipPath id=\"gb-a\"><path d=\"M0 0v30h60V0z\"/></clipPath><clipPath id=\"gb-b\"><path d=\"M30 15h30v15zv15H0zH0V0zV0h30z\"/></clipPath><g clip-path=\"url(#gb-a)\"><path d=\"M0 0v30h60V0z\" fill=\"#012169\"/><path d=\"m0 0 60 30m0-30L0 30\" stroke=\"#fff\" stroke-width=\"6\"/><path d=\"m0 0 60 30m0-30L0 30\" clip-path=\"url(#gb-b)\" stroke=\"#C8102E\" stroke-width=\"4\"/><path d=\"M30 0v30M0 15h60\" stroke=\"#fff\" stroke-width=\"10\"/><path d=\"M30 0v30M0 15h60\" stroke=\"#C8102E\" stroke-width=\"6\"/></g>"},"US":{"vb":"0 0 7410 3900","inner":"<path fill=\"#b31942\" d=\"M0 0h7410v3900H0\"/><path stroke=\"#FFF\" stroke-width=\"300\" d=\"M0 450h7410m0 600H0m0 600h7410m0 600H0m0 600h7410m0 600H0\"/><path fill=\"#0a3161\" d=\"M0 0h2964v2100H0\"/><g fill=\"#FFF\"><g id=\"us-d\"><g id=\"us-c\"><g id=\"us-e\"><g id=\"us-b\"><path id=\"us-a\" d=\"m247 90 70.534 217.082-184.66-134.164h228.253L176.466 307.082z\"/><use xlink:href=\"#us-a\" y=\"420\"/><use xlink:href=\"#us-a\" y=\"840\"/><use xlink:href=\"#us-a\" y=\"1260\"/></g><use xlink:href=\"#us-a\" y=\"1680\"/></g><use xlink:href=\"#us-b\" x=\"247\" y=\"210\"/></g><use xlink:href=\"#us-c\" x=\"494\"/></g><use xlink:href=\"#us-d\" x=\"988\"/><use xlink:href=\"#us-c\" x=\"1976\"/><use xlink:href=\"#us-e\" x=\"2470\"/></g>"}};
+    const COARSE_LAND_DOTS = [[287.5,-45.0],[294.0,-45.0],[287.5,-40.0],[294.0,-40.0],[300.5,-40.0],[294.0,-35.0],[300.5,-35.0],[142.0,-35.0],[148.5,-35.0],[294.0,-30.0],[300.5,-30.0],[307.0,-30.0],[18.5,-30.0],[25.0,-30.0],[116.0,-30.0],[122.5,-30.0],[129.0,-30.0],[135.5,-30.0],[142.0,-30.0],[148.5,-30.0],[294.0,-25.0],[300.5,-25.0],[307.0,-25.0],[313.5,-25.0],[18.5,-25.0],[25.0,-25.0],[31.5,-25.0],[116.0,-25.0],[122.5,-25.0],[129.0,-25.0],[135.5,-25.0],[142.0,-25.0],[148.5,-25.0],[294.0,-20.0],[300.5,-20.0],[307.0,-20.0],[313.5,-20.0],[18.5,-20.0],[25.0,-20.0],[31.5,-20.0],[122.5,-20.0],[129.0,-20.0],[135.5,-20.0],[142.0,-20.0],[294.0,-15.0],[300.5,-15.0],[307.0,-15.0],[313.5,-15.0],[320.0,-15.0],[18.5,-15.0],[25.0,-15.0],[31.5,-15.0],[38.0,-15.0],[129.0,-15.0],[135.5,-15.0],[287.5,-10.0],[294.0,-10.0],[300.5,-10.0],[307.0,-10.0],[313.5,-10.0],[320.0,-10.0],[18.5,-10.0],[25.0,-10.0],[31.5,-10.0],[38.0,-10.0],[281.0,-5.0],[287.5,-5.0],[294.0,-5.0],[300.5,-5.0],[307.0,-5.0],[313.5,-5.0],[320.0,-5.0],[12.0,-5.0],[18.5,-5.0],[25.0,-5.0],[31.5,-5.0],[38.0,-5.0],[281.0,0.0],[287.5,0.0],[294.0,0.0],[300.5,0.0],[307.0,0.0],[12.0,0.0],[18.5,0.0],[25.0,0.0],[31.5,0.0],[38.0,0.0],[44.5,0.0],[103.0,0.0],[116.0,0.0],[287.5,5.0],[294.0,5.0],[300.5,5.0],[5.5,5.0],[12.0,5.0],[18.5,5.0],[25.0,5.0],[31.5,5.0],[38.0,5.0],[44.5,5.0],[103.0,5.0],[116.0,5.0],[281.0,10.0],[-14.0,10.0],[-7.5,10.0],[-1.0,10.0],[5.5,10.0],[12.0,10.0],[18.5,10.0],[25.0,10.0],[31.5,10.0],[38.0,10.0],[44.5,10.0],[77.0,10.0],[103.0,10.0],[122.5,10.0],[268.0,15.0],[274.5,15.0],[-14.0,15.0],[-7.5,15.0],[-1.0,15.0],[5.5,15.0],[12.0,15.0],[18.5,15.0],[25.0,15.0],[31.5,15.0],[38.0,15.0],[77.0,15.0],[103.0,15.0],[122.5,15.0],[255.0,20.0],[261.5,20.0],[268.0,20.0],[274.5,20.0],[-14.0,20.0],[-7.5,20.0],[-1.0,20.0],[5.5,20.0],[12.0,20.0],[18.5,20.0],[25.0,20.0],[31.5,20.0],[38.0,20.0],[77.0,20.0],[83.5,20.0],[96.5,20.0],[103.0,20.0],[255.0,25.0],[261.5,25.0],[-7.5,25.0],[-1.0,25.0],[5.5,25.0],[12.0,25.0],[18.5,25.0],[25.0,25.0],[31.5,25.0],[64.0,25.0],[70.5,25.0],[77.0,25.0],[83.5,25.0],[90.0,25.0],[96.5,25.0],[103.0,25.0],[109.5,25.0],[116.0,25.0],[248.5,30.0],[255.0,30.0],[261.5,30.0],[268.0,30.0],[274.5,30.0],[-7.5,30.0],[-1.0,30.0],[5.5,30.0],[12.0,30.0],[18.5,30.0],[25.0,30.0],[31.5,30.0],[51.0,30.0],[57.5,30.0],[64.0,30.0],[70.5,30.0],[77.0,30.0],[83.5,30.0],[90.0,30.0],[96.5,30.0],[103.0,30.0],[109.5,30.0],[116.0,30.0],[242.0,35.0],[248.5,35.0],[255.0,35.0],[261.5,35.0],[268.0,35.0],[274.5,35.0],[281.0,35.0],[-7.5,35.0],[-1.0,35.0],[5.5,35.0],[12.0,35.0],[31.5,35.0],[38.0,35.0],[44.5,35.0],[51.0,35.0],[57.5,35.0],[64.0,35.0],[70.5,35.0],[77.0,35.0],[83.5,35.0],[90.0,35.0],[96.5,35.0],[103.0,35.0],[109.5,35.0],[116.0,35.0],[135.5,35.0],[242.0,40.0],[248.5,40.0],[255.0,40.0],[261.5,40.0],[268.0,40.0],[274.5,40.0],[281.0,40.0],[287.5,40.0],[-7.5,40.0],[-1.0,40.0],[18.5,40.0],[25.0,40.0],[31.5,40.0],[38.0,40.0],[44.5,40.0],[51.0,40.0],[57.5,40.0],[64.0,40.0],[70.5,40.0],[77.0,40.0],[83.5,40.0],[90.0,40.0],[96.5,40.0],[103.0,40.0],[109.5,40.0],[116.0,40.0],[122.5,40.0],[129.0,40.0],[242.0,45.0],[248.5,45.0],[255.0,45.0],[261.5,45.0],[268.0,45.0],[274.5,45.0],[281.0,45.0],[287.5,45.0],[294.0,45.0],[5.5,45.0],[12.0,45.0],[18.5,45.0],[25.0,45.0],[31.5,45.0],[38.0,45.0],[44.5,45.0],[51.0,45.0],[57.5,45.0],[64.0,45.0],[70.5,45.0],[77.0,45.0],[83.5,45.0],[90.0,45.0],[96.5,45.0],[103.0,45.0],[109.5,45.0],[116.0,45.0],[122.5,45.0],[129.0,45.0],[135.5,45.0],[235.5,50.0],[242.0,50.0],[248.5,50.0],[255.0,50.0],[261.5,50.0],[268.0,50.0],[274.5,50.0],[281.0,50.0],[287.5,50.0],[294.0,50.0],[300.5,50.0],[12.0,50.0],[18.5,50.0],[25.0,50.0],[31.5,50.0],[38.0,50.0],[44.5,50.0],[51.0,50.0],[57.5,50.0],[64.0,50.0],[70.5,50.0],[77.0,50.0],[83.5,50.0],[90.0,50.0],[96.5,50.0],[103.0,50.0],[109.5,50.0],[116.0,50.0],[122.5,50.0],[129.0,50.0],[135.5,50.0],[229.0,55.0],[235.5,55.0],[242.0,55.0],[248.5,55.0],[255.0,55.0],[261.5,55.0],[268.0,55.0],[274.5,55.0],[281.0,55.0],[287.5,55.0],[294.0,55.0],[300.5,55.0],[12.0,55.0],[18.5,55.0],[25.0,55.0],[31.5,55.0],[38.0,55.0],[44.5,55.0],[51.0,55.0],[57.5,55.0],[64.0,55.0],[70.5,55.0],[77.0,55.0],[83.5,55.0],[90.0,55.0],[96.5,55.0],[103.0,55.0],[109.5,55.0],[116.0,55.0],[122.5,55.0],[129.0,55.0],[135.5,55.0],[142.0,55.0],[148.5,55.0],[155.0,55.0],[203.0,60.0],[209.5,60.0],[216.0,60.0],[222.5,60.0],[229.0,60.0],[235.5,60.0],[242.0,60.0],[248.5,60.0],[255.0,60.0],[261.5,60.0],[268.0,60.0],[274.5,60.0],[281.0,60.0],[287.5,60.0],[294.0,60.0],[18.5,60.0],[25.0,60.0],[31.5,60.0],[38.0,60.0],[44.5,60.0],[51.0,60.0],[57.5,60.0],[64.0,60.0],[70.5,60.0],[77.0,60.0],[83.5,60.0],[90.0,60.0],[96.5,60.0],[103.0,60.0],[109.5,60.0],[116.0,60.0],[122.5,60.0],[129.0,60.0],[135.5,60.0],[142.0,60.0],[148.5,60.0],[155.0,60.0],[161.5,60.0],[196.5,65.0],[203.0,65.0],[209.5,65.0],[216.0,65.0],[222.5,65.0],[229.0,65.0],[235.5,65.0],[242.0,65.0],[248.5,65.0],[255.0,65.0],[261.5,65.0],[268.0,65.0],[274.5,65.0],[281.0,65.0],[25.0,65.0],[31.5,65.0],[38.0,65.0],[44.5,65.0],[51.0,65.0],[57.5,65.0],[64.0,65.0],[70.5,65.0],[77.0,65.0],[83.5,65.0],[90.0,65.0],[96.5,65.0],[103.0,65.0],[109.5,65.0],[116.0,65.0],[122.5,65.0],[129.0,65.0],[135.5,65.0],[142.0,65.0],[148.5,65.0],[155.0,65.0],[161.5,65.0],[114.2,22.3],[103.8,1.4],[139.7,35.7],[121.0,23.8],[238.1,37.3],[241.8,34.0]];
+
+    // =========================================================================
+    // 2. WAN IP & GEO — ACTUAL DATA ONLY (no guessing, no third-party GeoIP)
+    // Priority: manual override (explicit, local) > explicit lat/lon in the
+    // report > unlocated. A peer without coordinates is NEVER placed on the
+    // map, and a peer without wan_ip/public_ip shows '-' for WAN IP.
+    // Note: easytier-cli peer does not carry wan_ip/city/lat/lon by default,
+    // and et-report.sh does not add them, so '-' / unlocated is the normal
+    // state until the reporter is extended to carry those fields.
+    // =========================================================================
+    let userGeoOverrides = {};
+    try {
+      userGeoOverrides = JSON.parse(localStorage.getItem('et_hub_geo_overrides') || '{}');
+    } catch (e) {}
+
+    function saveGeoOverrides() {
+      try {
+        localStorage.setItem('et_hub_geo_overrides', JSON.stringify(userGeoOverrides));
+      } catch (e) {}
+    }
+
+    function extractCleanIp(raw) {
+      if (!raw || raw === '-') return '';
+      const s = String(raw).trim();
+      const m = s.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+      return m ? m[1] : '';
+    }
+
+    function isPrivateIp(ip) {
+      return /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(ip || '');
+    }
+
+    // Only fields the report actually carries. conns[].remote_addr is NOT
+    // used: for relay peers it is the relay's address, not the peer's WAN IP.
+    function actualWanIp(peer) {
+      const ip = extractCleanIp(pick(peer, 'wan_ipv4', 'wan_ip', 'public_ip'));
+      if (!ip || isPrivateIp(ip)) return '-';
+      return ip;
+    }
+    function actualWanIpv6(peer) {
+      const ip = extractCleanIp(pick(peer, 'wan_ipv6'));
+      if (!ip || ip === '::1' || ip.toLowerCase().startsWith('fe80')) return '';
+      return ip;
+    }
+
+    function resolvePeerGeo(peer, idx) {
+      const vip = pick(peer, 'ipv4', 'virtual_ipv4');
+      const host = String(pick(peer, 'hostname'));
+      const cost = String(pick(peer, 'cost'));
+      const proto = String(pick(peer, 'tunnel_proto'));
+      const nat = natZh(pick(peer, 'nat_type'));
+      const override = userGeoOverrides[vip] || userGeoOverrides[host];
+      const defaultSubtitle = cost.toLowerCase().includes('local')
+        ? `${vip} · Local (${proto})`
+        : `${vip} · ${nat !== '-' ? nat : proto}`;
+      const wanFromOverride = override?.wan_ip ? extractCleanIp(override.wan_ip) : '';
+      const wanIp = (wanFromOverride && !isPrivateIp(wanFromOverride)) ? wanFromOverride : actualWanIp(peer);
+      const wanIpv6 = actualWanIpv6(peer);
+      const peerCountry = String(pick(peer, 'country') ?? '').trim();
+
+      if (override && Number.isFinite(Number(override.lat)) && Number.isFinite(Number(override.lon))) {
+        return {
+          city: override.city || '', subtitle: defaultSubtitle, wanIp, wanIpv6, country: peerCountry,
+          lat: Number(override.lat), lon: Number(override.lon), routeLabel: '',
+          located: true, source: '手动标注'
+        };
+      }
+      const explicitLat = Number(peer.lat ?? peer.latitude ?? peer.geo?.lat);
+      const explicitLon = Number(peer.lon ?? peer.lng ?? peer.longitude ?? peer.geo?.lon);
+      if (Number.isFinite(explicitLat) && Number.isFinite(explicitLon) && (explicitLat !== 0 || explicitLon !== 0)) {
+        return {
+          city: pick(peer, 'city', 'region') !== '-' ? pick(peer, 'city', 'region') : '',
+          subtitle: defaultSubtitle, wanIp, wanIpv6, country: peerCountry,
+          lat: explicitLat, lon: explicitLon, routeLabel: '',
+          located: true, source: '上报坐标'
+        };
+      }
+      // Unlocated on purpose: no hostname guessing, no IP-prefix guessing,
+      // no fallback-city rotation, no third-party lookup.
+      return {
+        city: override?.city || '', subtitle: defaultSubtitle, wanIp, wanIpv6, country: peerCountry,
+        lat: 0, lon: 0, routeLabel: '', located: false, source: '未定位'
+      };
+    }
+
+    // =========================================================================
+    // 4. APPLICATION STATE & HELPERS
+    // =========================================================================
+    const state = {
+      payload: { now: Date.now(), reporters: [] },
+      relayHealth: null,
+      lastError: '',
+      events: [],
+      unlocatedPeers: [],
+      selectedReporter: '__latest__',
+      filter: 'all',
+      search: '',
+      sortCol: 'lat_ms',
+      sortAsc: true,
+      viewMode: 'table',
+      countdown: 10,
+      currentPeers: [],
+      filteredPeers: [],
+      selectedPeerRaw: null,
+      mapPreset: 'auto',
+      mapZoom: 1.0,
+      mapPanX: 0,
+      mapPanY: 0,
+      mapCollapsed: false
+    };
+
+    function formatBytes(val) {
+      if (val == null || val === '' || val === '-') return '-';
+      const num = Number(val);
+      if (!Number.isFinite(num)) return String(val);
+      if (num === 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const idx = Math.min(Math.floor(Math.log(num) / Math.log(1024)), units.length - 1);
+      const scaled = num / Math.pow(1024, idx);
+      return `${scaled >= 100 || idx === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[idx]}`;
+    }
+
+    function parseNumericBytes(val) {
+      if (typeof val === 'number' && Number.isFinite(val)) return val;
+      if (typeof val !== 'string') return 0;
+      const m = val.trim().match(/^([\d.]+)\s*(B|KB|MB|GB|TB)?$/i);
+      if (!m) return 0;
+      const n = parseFloat(m[1]);
+      const unit = (m[2] || 'B').toUpperCase();
+      const mult = { B: 1, KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3, TB: 1000 ** 4 }[unit] || 1;
+      return n * mult;
+    }
+
+    function parseNumericLatency(val) {
+      const n = parseFloat(String(val ?? '').replace(/[^\d.]/g, ''));
+      return Number.isFinite(n) ? n : 999999;
+    }
+
+    function parseNumericLoss(val) {
+      const n = parseFloat(String(val ?? '').replace(/[^\d.]/g, ''));
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function ipv4ToInt(ip) {
+      const parts = String(ip ?? '').trim().split('.');
+      if (parts.length !== 4) return Number.MAX_SAFE_INTEGER;
+      return parts.reduce((acc, p) => (acc << 8) + (parseInt(p, 10) || 0), 0) >>> 0;
+    }
+
+    // 中继节点：peer 表里没有虚拟 IP、没有主机名的那一条就是 Cloudflare
+    // 上的 relay 节点（经 wss 连上来，本身不在虚拟网段里），不是一台漏了
+    // IP 的机器。识别规则只认“无 IP + 无主机名 + wss”，不按版本猜。
+    function isRelayPeer(peer) {
+      const ip = String(pick(peer, 'ipv4', 'virtual_ipv4') ?? '').trim();
+      const host = String(pick(peer, 'hostname') ?? '').trim();
+      const proto = String(pick(peer, 'tunnel_proto') ?? '').toLowerCase();
+      return !ip && !host && proto.includes('wss');
+    }
+    function relayDisplay(peer) {
+      return isRelayPeer(peer) ? { hostname: '中继', cost: 'relay' } : null;
+    }
+    function classifyConn(costStr, peer) {
+      if (peer && isRelayPeer(peer)) return 'relay';
+      const s = String(costStr ?? '').toLowerCase();
+      if (s.includes('local')) return 'local';
+      if (s.includes('p2p')) return 'p2p';
+      if (s.includes('relay')) return 'relay';
+      return 'other';
+    }
+    // NAT 类型中英文对照（以 easytier-proto/common.proto 的 NatType 为准）
+    function natZh(val) {
+      // CLI 里同一类型有 NoPAT / NoPat 两种写法，按小写匹配，避免漏翻
+      const m = {
+        'unknown': '未知', 'openinternet': '公网直连', 'nopat': '无端口转换',
+        'fullcone': '全锥型', 'restricted': '受限型', 'portrestricted': '端口受限型',
+        'symmetric': '对称型', 'symudpfirewall': '对称 UDP 防火墙',
+        'symmetriceasyinc': '对称型（端口递增）', 'symmetriceasydec': '对称型（端口递减）',
+      };
+      const k = String(val ?? '').trim();
+      if (!k || k === '-') return '-';
+      return m[k.toLowerCase()] ?? k;
+    }
+
+    function showToast(msg) {
+      const t = $('toast');
+      $('toastText').textContent = msg;
+      t.classList.remove('hidden');
+      t.classList.add('flex');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => {
+        t.classList.add('hidden');
+        t.classList.remove('flex');
+      }, 2200);
+    }
+
+    function copyText(text, label = '已复制到剪贴板') {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast(label)).catch(() => fallbackCopy(text, label));
+      } else {
+        fallbackCopy(text, label);
+      }
+    }
+
+    function fallbackCopy(text, label) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); showToast(label); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+
+    function setLiveStatus(ok, msg) {
+      const dot = $('modeDot');
+      const label = $('modeLabel');
+      if (ok) {
+        dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
+        label.textContent = '实时 API';
+      } else {
+        dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+        label.textContent = msg || '实时接口失败';
+      }
+    }
+
+
+    // =========================================================================
+    // 5. FAST COARSE-DOT SVG TOPOLOGY RENDERER (Pure EasyTier Params)
+    // =========================================================================
+    const SVG_W = 1000;
+    const SVG_H = 420;
+
+    function toPacLon(lon) {
+      let n = Number(lon);
+      if (!Number.isFinite(n)) return 114;
+      return n < -30 ? n + 360 : n;
+    }
+
+    function getMapViewportBounds(nodes) {
+      let minLon = 92, maxLon = 256, minLat = -8, maxLat = 54;
+      if (state.mapPreset === 'pacific') {
+        minLon = 90; maxLon = 258; minLat = -8; maxLat = 54;
+      } else if (state.mapPreset === 'apac') {
+        minLon = 90; maxLon = 154; minLat = -8; maxLat = 48;
+      } else if (state.mapPreset === 'world') {
+        minLon = -15; maxLon = 295; minLat = -45; maxLat = 66;
+      } else if (nodes.length > 0) {
+        const lons = nodes.map(n => toPacLon(n.geo.lon));
+        const lats = nodes.map(n => n.geo.lat);
+        minLon = Math.min(...lons) - 20;
+        maxLon = Math.max(...lons) + 24;
+        minLat = Math.min(...lats) - 12;
+        maxLat = Math.max(...lats) + 16;
+        if (maxLon - minLon < 45) {
+          const mid = (minLon + maxLon) / 2;
+          minLon = mid - 25; maxLon = mid + 25;
+        }
+        if (maxLat - minLat < 26) {
+          const mid = (minLat + maxLat) / 2;
+          minLat = mid - 14; maxLat = mid + 14;
+        }
+      }
+
+      const lonSpan = (maxLon - minLon) / state.mapZoom;
+      const latSpan = (maxLat - minLat) / state.mapZoom;
+      const centerLon = (minLon + maxLon) / 2 - (state.mapPanX / SVG_W) * lonSpan;
+      const centerLat = (minLat + maxLat) / 2 + (state.mapPanY / SVG_H) * latSpan;
+
+      const aspect = SVG_W / SVG_H;
+      let effLonSpan = lonSpan;
+      let effLatSpan = latSpan;
+      if (effLonSpan / effLatSpan > aspect * 1.15) {
+        effLatSpan = effLonSpan / (aspect * 1.15);
+      } else {
+        effLonSpan = effLatSpan * aspect * 1.15;
+      }
+
+      return {
+        minLon: centerLon - effLonSpan / 2,
+        maxLon: centerLon + effLonSpan / 2,
+        minLat: centerLat - effLatSpan / 2,
+        maxLat: centerLat + effLatSpan / 2
+      };
+    }
+
+    function projectLonLat(lon, lat, bounds) {
+      const pacLon = toPacLon(lon);
+      const x = ((pacLon - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * SVG_W;
+      const y = ((bounds.maxLat - lat) / (bounds.maxLat - bounds.minLat)) * SVG_H;
+      return { x, y };
+    }
+
+    function evalQuadBezier(p0, p1, p2, t) {
+      const inv = 1 - t;
+      return {
+        x: inv * inv * p0.x + 2 * inv * t * p1.x + t * t * p2.x,
+        y: inv * inv * p0.y + 2 * inv * t * p1.y + t * t * p2.y
+      };
+    }
+
+    function buildMapNodesAndLinks() {
+      const peers = state.currentPeers || [];
+      const isDark = document.documentElement.classList.contains('dark');
+
+      const allNodes = peers.map((p, idx) => {
+        const geo = resolvePeerGeo(p, idx);
+        const relay = relayDisplay(p);
+        const host = relay ? relay.hostname : String(pick(p, 'hostname'));
+        const cost = relay ? relay.cost : String(pick(p, 'cost'));
+        const kind = classifyConn(cost, p);
+        const latNum = parseNumericLatency(pick(p, 'lat_ms'));
+        const proto = String(pick(p, 'tunnel_proto')).toLowerCase();
+
+        // Color based on EasyTier connection cost & protocol
+        const defaultColor =
+          kind === 'local' ? '#14b8a6' :
+          kind === 'relay' ? '#f59e0b' :
+          proto === 'wg' ? '#a855f7' :
+          proto === 'tcp' ? (isDark ? '#38bdf8' : '#0284c7') :
+          '#10b981';
+
+        const displayTitle = host;
+
+        return {
+          idx,
+          peer: p,
+          geo,
+          host,
+          displayTitle,
+          cost,
+          kind,
+          latNum,
+          proto,
+          color: defaultColor
+        };
+      });
+
+      const nodes = allNodes.filter(n => n.geo.located);
+      state.unlocatedPeers = allNodes.filter(n => !n.geo.located).map(n => n.peer);
+
+      const coordBuckets = {};
+      nodes.forEach(n => {
+        const k = `${n.geo.lat.toFixed(1)},${n.geo.lon.toFixed(1)}`;
+        coordBuckets[k] = (coordBuckets[k] || 0) + 1;
+        if (coordBuckets[k] > 1) {
+          const angle = (coordBuckets[k] - 1) * 1.2;
+          n.geo = {
+            ...n.geo,
+            lat: n.geo.lat + Math.sin(angle) * 1.6,
+            lon: n.geo.lon + Math.cos(angle) * 2.1
+          };
+        }
+      });
+
+      const hubNode = nodes.find(n => n.kind === 'local') || nodes[0];
+      const links = [];
+
+      if (hubNode) {
+        nodes.forEach((target, i) => {
+          if (target === hubNode) return;
+          const isRelay = target.kind === 'relay';
+          const arcColor = isRelay ? '#f59e0b' : target.color;
+
+          // Authentic EasyTier link badge: "<cost> · <tunnel_proto> · <lat_ms> ms"
+          let pillText = target.geo.routeLabel;
+          if (!pillText) {
+            const latStr = target.latNum < 999999 ? `${Math.round(target.latNum)} ms` : '';
+            const protoStr = target.proto !== '-' ? target.proto : 'udp';
+            pillText = `${target.cost} · ${protoStr}${latStr ? ' · ' + latStr : ''}`;
+          }
+
+          links.push({
+            from: hubNode,
+            to: target,
+            color: arcColor,
+            isRelay,
+            pillText,
+            curveLift: isRelay ? 0.62 : (i % 2 === 0 ? 0.95 : 0.78)
+          });
+        });
+      }
+
+      return { nodes, links, hubNode };
+    }
+
+    function renderSvgGeoMap() {
+      if (state.mapCollapsed) return;
+      const { nodes, links } = buildMapNodesAndLinks();
+      const bounds = getMapViewportBounds(nodes);
+
+      // 0. Country outlines: smooth closed Bezier (Catmull-Rom) so the edge
+      // is not jagged, no stroke. Inside each outline, the real flag file
+      // from flagcdn (flag-icons, MIT, fetched 2026-10-29) is embedded as a
+      // nested <svg> with preserveAspectRatio="slice": flag ratio is kept,
+      // it is cropped to cover the country bbox, then clipped to the outline.
+      // Ids inside CN/GB/US flags are prefixed per country to avoid collisions.
+      const smoothClosedPath = (pts) => {
+        const n = pts.length;
+        if (n < 3) return `M ${pts.map(pt => `${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' L ')} Z`;
+        let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+        for (let i = 0; i < n; i++) {
+          const p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n], p3 = pts[(i + 2) % n];
+          const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+          const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+          d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+        }
+        return d + ' Z';
+      };
+      const countryHtml = [];
+      for (const [code, rings] of Object.entries(COUNTRY_POLYS)) {
+        const flag = FLAG_FILES[code];
+        if (!flag) continue;
+        const paths = [];
+        let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        for (const ring of rings) {
+          const pts = ring.map(([lon, lat]) => projectLonLat(lon, lat, bounds));
+          pts.forEach(pt => { minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x); minY = Math.min(minY, pt.y); maxY = Math.max(maxY, pt.y); });
+          paths.push(smoothClosedPath(pts));
+        }
+        if (!paths.length || minX > SVG_W + 20 || maxX < -20 || minY > SVG_H + 20 || maxY < -20) continue;
+        const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+        countryHtml.push(`<g opacity="0.75"><clipPath id="clip-${code}"><path d="${paths.join(' ')}" /></clipPath><g clip-path="url(#clip-${code})"><svg x="${minX.toFixed(1)}" y="${minY.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" viewBox="${flag.vb}" preserveAspectRatio="xMidYMid slice">${flag.inner}</svg></g></g>`);
+      }
+      $('svgCountries').innerHTML = countryHtml.join('');
+
+      // 1. Coarse Land Dots
+      const landDotsHtml = [];
+      for (let i = 0; i < COARSE_LAND_DOTS.length; i++) {
+        const pt = COARSE_LAND_DOTS[i];
+        const x = ((pt[0] - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * SVG_W;
+        const y = ((bounds.maxLat - pt[1]) / (bounds.maxLat - bounds.minLat)) * SVG_H;
+        if (x >= -10 && x <= SVG_W + 10 && y >= -10 && y <= SVG_H + 10) {
+          landDotsHtml.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4" fill="var(--map-dot-land)" />`);
+        }
+      }
+      $('svgLandDots').innerHTML = landDotsHtml.join('');
+
+      // 2. Project active peer nodes
+      const screenNodes = nodes.map(n => {
+        const pt = projectLonLat(n.geo.lon, n.geo.lat, bounds);
+        return { ...n, x: pt.x, y: pt.y };
+      });
+      const nodeByIdx = {};
+      screenNodes.forEach(sn => { nodeByIdx[sn.idx] = sn; });
+
+      // 3. Render Curved Bézier Links & Pill Badges
+      const linksHtml = [];
+      const pillsHtml = [];
+      const pillPositions = [];
+
+      links.forEach((lnk, lIdx) => {
+        const p0 = nodeByIdx[lnk.from.idx];
+        const p2 = nodeByIdx[lnk.to.idx];
+        if (!p0 || !p2) return;
+
+        const dx = p2.x - p0.x;
+        const dy = p2.y - p0.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 4) return;
+
+        const midX = (p0.x + p2.x) / 2;
+        const midY = (p0.y + p2.y) / 2;
+        const archHeight = Math.min(165, dist * 0.26) * (lnk.curveLift ?? 1);
+        const ctrl = { x: midX, y: midY - archHeight };
+
+        const pathD = `M ${p0.x.toFixed(1)} ${p0.y.toFixed(1)} Q ${ctrl.x.toFixed(1)} ${ctrl.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+
+        linksHtml.push(`
+          <path d="${pathD}" fill="none" stroke="${lnk.color}" stroke-width="1.75" stroke-opacity="0.55" />
+          <path d="${pathD}" fill="none" stroke="${lnk.color}" stroke-width="2.6" stroke-linecap="round" class="map-arc-flow" />
+        `);
+
+        for (let s = 1; s <= 4; s++) {
+          const gpt = evalQuadBezier(p0, ctrl, p2, s / 5);
+          linksHtml.push(`<circle cx="${gpt.x.toFixed(1)}" cy="${gpt.y.toFixed(1)}" r="1.8" fill="${lnk.color}" fill-opacity="0.65" />`);
+        }
+
+        const pillT = lnk.isRelay ? 0.50 : (lIdx % 2 === 0 ? 0.44 : 0.56);
+        const pillPt = evalQuadBezier(p0, ctrl, p2, pillT);
+        let pillX = pillPt.x;
+        let pillY = pillPt.y + (lnk.pillOffsetY || (lnk.isRelay ? 16 : -14));
+
+        for (const prev of pillPositions) {
+          if (Math.abs(pillX - prev.x) < 115 && Math.abs(pillY - prev.y) < 26) {
+            pillY = prev.y + 27;
+          }
+        }
+        pillPositions.push({ x: pillX, y: pillY });
+
+        let charUnits = 0;
+        for (const ch of lnk.pillText) {
+          charUnits += ch.charCodeAt(0) > 255 ? 1.75 : 1.0;
+        }
+        const pillW = Math.max(76, Math.round(charUnits * 7.2 + 24));
+        const pillH = 24;
+
+        pillsHtml.push(`
+          <g transform="translate(${pillX.toFixed(1)}, ${pillY.toFixed(1)})">
+            <rect x="${(-pillW / 2).toFixed(1)}" y="${(-pillH / 2).toFixed(1)}" width="${pillW}" height="${pillH}" rx="12"
+              fill="var(--map-pill-bg)" stroke="${lnk.color}" stroke-width="1.2" />
+            <text x="0" y="1" text-anchor="middle" dominant-baseline="middle"
+              fill="${lnk.color}" font-size="11.5" font-weight="600" class="font-mono-num">${esc(lnk.pillText)}</text>
+          </g>
+        `);
+      });
+
+      // Unlocated peers are listed, never plotted.
+      const uw = $('unlocatedWrap');
+      if (uw) {
+        if (state.unlocatedPeers && state.unlocatedPeers.length) {
+          uw.classList.remove('hidden');
+          $('unlocatedList').innerHTML = state.unlocatedPeers.map(p => {
+            const g = resolvePeerGeo(p, 0);
+            const relay = relayDisplay(p);
+            const host = relay ? relay.hostname : pick(p, 'hostname');
+            const ip = relay ? '-' : pick(p, 'ipv4', 'virtual_ipv4');
+            return `${esc(host)} (${esc(ip)} · WAN ${esc(g.wanIp)}${g.wanIpv6 ? ' / ' + esc(g.wanIpv6) : ''}${g.city ? ' · ' + esc(g.city) : ''})`;
+          }).join('、');
+        } else {
+          uw.classList.add('hidden');
+        }
+      }
+
+      $('svgLinks').innerHTML = linksHtml.join('');
+      $('svgPills').innerHTML = pillsHtml.join('');
+
+      // 4. Render Glowing Nodes & EasyTier Node Labels
+      const nodesHtml = screenNodes.map(sn => {
+        const title = sn.displayTitle;
+        const subTitle = sn.geo.subtitle;
+
+        let anchor = 'start';
+        let ox = 16;
+        let oy = -4;
+
+        if (title.includes('广州')) {
+          anchor = 'end'; ox = -16; oy = -10;
+        } else if (title.includes('上海')) {
+          anchor = 'end'; ox = -16; oy = -12;
+        } else if (title.includes('圣何塞')) {
+          anchor = 'end'; ox = -16; oy = -14;
+        } else if (title.includes('洛杉矶')) {
+          anchor = 'end'; ox = -16; oy = 22;
+        } else if (title.includes('香港')) {
+          anchor = 'start'; ox = 16; oy = 16;
+        }
+
+        return `
+          <g class="svg-map-node cursor-pointer" data-node-idx="${sn.idx}" transform="translate(${sn.x.toFixed(1)}, ${sn.y.toFixed(1)})">
+            <circle cx="0" cy="0" r="13" fill="${sn.color}" fill-opacity="0.20" stroke="${sn.color}" stroke-opacity="0.5" stroke-width="1.2" class="map-node-halo" />
+            <circle cx="0" cy="0" r="5.5" fill="${sn.color}" />
+            <text x="${ox}" y="${oy}" text-anchor="${anchor}" dominant-baseline="middle"
+              fill="var(--map-node-title)" stroke="var(--map-label-halo)" stroke-width="3.5" paint-order="stroke"
+              font-size="14" font-weight="700">${esc(title)}</text>
+          </g>
+        `;
+      });
+
+      $('svgNodes').innerHTML = nodesHtml.join('');
+      state.screenNodes = screenNodes;
+    }
+
+    // =========================================================================
+    // 6. DASHBOARD & TABLE RENDERERS
+    // =========================================================================
+    function populateReporterSelect(reporters) {
+      const sel = $('reporterSelect');
+      const prev = state.selectedReporter;
+      const sorted = [...reporters].sort((a, b) => (b.at || 0) - (a.at || 0));
+      const optionsHtml = [
+        `<option value="__latest__">最新上报节点 (${sorted[0] ? esc(sorted[0].reporter) : '-'})</option>`,
+        ...sorted.map(r => `<option value="${esc(r.reporter)}">${esc(r.reporter)}</option>`)
+      ].join('');
+      sel.innerHTML = optionsHtml;
+      if (sorted.some(r => r.reporter === prev)) {
+        sel.value = prev;
+      } else {
+        state.selectedReporter = '__latest__';
+        sel.value = '__latest__';
+      }
+    }
+
+    function renderDashboard() {
+      const j = state.payload;
+      if (!j) return;
+
+      const reporters = (j.reporters || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0));
+      $('reporterCount').textContent = reporters.length;
+
+      if (!reporters.length) {
+        $('src').textContent = '暂无上报';
+        $('age').textContent = '等待节点上报';
+        $('age').className = 'text-xs font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500';
+        // Relay health comes from /relay itself, not from a reporter snapshot,
+        // so it stays visible even when no node has reported yet.
+        const rh = state.relayHealth || {};
+        $('relay').textContent = rh.ok ? (rh.state || 'running') : '-';
+        $('conn').textContent = rh.ok ? `${rh.connections ?? 0} 条 wss 连接` : '—';
+        $('count').textContent = '0';
+        $('rows').innerHTML = '';
+        $('cardsViewWrap').innerHTML = '';
+        state.currentPeers = [];
+        state.unlocatedPeers = [];
+        renderSvgGeoMap();
+        $('emptyState').classList.remove('hidden');
+        return;
+      }
+
+      populateReporterSelect(reporters);
+      const cur = state.selectedReporter === '__latest__'
+        ? reporters[0]
+        : (reporters.find(r => r.reporter === state.selectedReporter) || reporters[0]);
+
+      const nowTs = j.now || Date.now();
+      const age = Math.max(0, Math.round((nowTs - cur.at) / 1000));
+      $('src').textContent = cur.reporter || '-';
+      $('age').textContent = age > 180 ? `数据已过期 (${age}s)` : `${age}s 前更新`;
+      $('age').className = age > 180
+        ? 'text-xs font-medium px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0 warn'
+        : 'text-xs font-medium px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0';
+
+      const syncDate = new Date(cur.at || nowTs);
+      $('lastSyncTime').textContent = syncDate.toLocaleTimeString('zh-CN', { hour12: false });
+
+      const h = state.relayHealth || cur.relay || {};
+      const relayOk = Boolean(h.ok);
+      $('relay').textContent = relayOk ? (h.state || 'running') : 'down';
+      $('relay').className = `text-2xl font-bold tracking-tight ${relayOk ? 'text-emerald-600 dark:text-emerald-400 ok' : 'text-rose-600 dark:text-rose-400 bad'}`;
+      $('relayDot').className = relayOk
+        ? 'relative w-2.5 h-2.5 rounded-full bg-emerald-500 status-dot-pulse'
+        : 'relative w-2.5 h-2.5 rounded-full bg-rose-500';
+      $('conn').textContent = relayOk ? `${h.connections ?? 0} 条 wss 连接` : '连接中断';
+
+      const peers = list(cur.data?.peers).filter(p => !isRelayPeer(p));
+      state.currentPeers = peers;
+      $('count').textContent = peers.length;
+
+      let p2pCount = 0, relayCount = 0, localCount = 0;
+      let latSum = 0, latValidCount = 0;
+      let lossSum = 0, lossValidCount = 0;
+      let totalRx = 0, totalTx = 0;
+
+      peers.forEach(p => {
+        const kind = classifyConn(pick(p, 'cost'), p);
+        if (kind === 'p2p') p2pCount++;
+        else if (kind === 'relay') relayCount++;
+        else if (kind === 'local') localCount++;
+
+        const lat = parseNumericLatency(pick(p, 'lat_ms'));
+        if (lat < 999999 && kind !== 'local') {
+          latSum += lat;
+          latValidCount++;
+        }
+        const rawLoss = pick(p, 'loss_rate');
+        if (rawLoss !== '-') {
+          lossSum += parseNumericLoss(rawLoss);
+          lossValidCount++;
+        }
+        totalRx += parseNumericBytes(pick(p, 'rx_bytes'));
+        totalTx += parseNumericBytes(pick(p, 'tx_bytes'));
+      });
+
+      const remotePeers = Math.max(1, peers.length - localCount);
+      const p2pPct = peers.length ? Math.round((p2pCount / remotePeers) * 100) : 0;
+      $('p2pRateBadge').textContent = `p2p 直连率 ${Math.min(100, p2pPct)}%（${p2pCount}/${remotePeers} 非本机）`;
+      $('breakdownText').textContent = `p2p: ${p2pCount} · relay: ${relayCount} · Local: ${localCount}`;
+
+      const total = Math.max(1, peers.length);
+      $('barP2P').style.width = `${(p2pCount / total) * 100}%`;
+      $('barRelay').style.width = `${(relayCount / total) * 100}%`;
+      $('barLocal').style.width = `${(localCount / total) * 100}%`;
+
+      $('avgLat').textContent = latValidCount ? (latSum / latValidCount).toFixed(1) : '-';
+      const avgLossVal = lossValidCount ? (lossSum / lossValidCount).toFixed(1) : '0.0';
+      $('avgLoss').textContent = `丢包 ${avgLossVal}%`;
+      $('totalTraffic').textContent = `${formatBytes(totalRx)} / ${formatBytes(totalTx)}`;
+
+      $('tabCountAll').textContent = peers.length;
+      $('tabCountP2p').textContent = p2pCount;
+      $('tabCountRelay').textContent = relayCount;
+      $('tabCountLocal').textContent = localCount;
+
+      renderSvgGeoMap();
+      renderPeersList();
+    }
+
+
+    // 服务商映射（按主机名精确匹配）：官方全套 SVG 均不存在（调研结论：Azure 仅有
+    // 图标 SVG，其余只有 PNG 或纯文字），所以全部按品牌色重绘为轻量 SVG 字标，
+    // 不外链、不嵌 PNG。匹配不上就只显示主机名，不放假 logo。
+    const PROVIDER_MAP = {
+      'bwg': { name: 'BandwagonHost', url: 'https://bandwagonhost.com/', svg: '<svg viewBox="0 0 160 24" class="h-5 w-auto" xmlns="http://www.w3.org/2000/svg"><rect width="160" height="24" rx="5" fill="#3a2410"/><text x="8" y="17" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="800" font-style="italic" fill="#facc15">Bandwagon</text><text x="102" y="17" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="800" font-style="italic" fill="#ffffff">HOST</text></svg>' },
+      'niubio': { name: 'GreenCloud VPS', url: 'https://greencloudvps.com/', svg: '<svg viewBox="0 0 150 24" class="h-5 w-auto" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="6" fill="#22c55e"/><circle cx="20" cy="10" r="7" fill="#22c55e"/><circle cx="28" cy="14" r="5" fill="#22c55e"/><text x="38" y="17" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="700" fill="#16a34a">GreenCloud</text></svg>' },
+      'oba': { name: '腾讯云', url: 'https://www.tencentcloud.com/', svg: '<svg viewBox="0 0 120 24" class="h-5 w-auto" xmlns="http://www.w3.org/2000/svg"><path d="M8 16a5 5 0 0 1 1-9.9A7 7 0 0 1 22 8a4.5 4.5 0 0 1-2 8H8z" fill="#006eff"/><text x="28" y="17" font-family="PingFang SC,Microsoft YaHei,sans-serif" font-size="13" font-weight="700" fill="#006eff">腾讯云</text></svg>' },
+      'azure-daye': { name: 'Microsoft Azure', url: 'https://azure.microsoft.com/', svg: '<svg viewBox="0 0 150 24" class="h-5 w-auto" xmlns="http://www.w3.org/2000/svg"><path d="M12 3 L20 20 L4 20 Z" fill="#0078d4"/><path d="M12 3 L20 20 L12 14 Z" fill="#00a4ef" opacity="0.85"/><text x="26" y="17" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="600" fill="#0078d4">Azure</text></svg>' },
+      'de': { name: 'h2.nexus', url: 'https://h2.nexus/', svg: '<svg viewBox="0 0 90 24" class="h-5 w-auto" xmlns="http://www.w3.org/2000/svg"><text x="2" y="17" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="800" fill="#312e81">h2.nexus</text></svg>' },
+      'fr': { name: 'BitsFlow Cloud', url: 'https://bitsflow.cloud/', svg: '<svg viewBox="0 0 130 24" class="h-5 w-auto" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="8" fill="none" stroke="#0ea5e9" stroke-width="2.5"/><circle cx="12" cy="12" r="3" fill="#0ea5e9"/><text x="26" y="17" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="700" fill="#0284c7">BitsFlow</text></svg>' },
+    };
+    function providerFor(host) { return PROVIDER_MAP[String(host ?? '').trim()] || null; }
+
+    function renderPeersList() {
+      const peers = state.currentPeers || [];
+      const q = state.search.trim().toLowerCase();
+
+      const filtered = peers.filter((p, idx) => {
+        const kind = classifyConn(pick(p, 'cost'), p);
+        if (state.filter !== 'all' && kind !== state.filter) return false;
+        if (!q) return true;
+        const geo = resolvePeerGeo(p, idx);
+        const ip = String(pick(p, 'ipv4', 'virtual_ipv4')).toLowerCase();
+        const host = String(pick(p, 'hostname')).toLowerCase();
+        const proto = String(pick(p, 'tunnel_proto')).toLowerCase();
+        const nat = String(pick(p, 'nat_type')).toLowerCase();
+        const cost = String(pick(p, 'cost')).toLowerCase();
+        const wan = String(geo.wanIp).toLowerCase();
+        const city = String(geo.city).toLowerCase();
+        return ip.includes(q) || host.includes(q) || proto.includes(q) || nat.includes(q) || cost.includes(q) || wan.includes(q) || city.includes(q);
+      });
+
+      const col = state.sortCol;
+      const dir = state.sortAsc ? 1 : -1;
+      filtered.sort((a, b) => {
+        const aLocal = String(pick(a, 'cost')) === 'Local';
+        const bLocal = String(pick(b, 'cost')) === 'Local';
+        if (aLocal !== bLocal) return aLocal ? -1 : 1;
+        if (col === 'ipv4') {
+          return (ipv4ToInt(pick(a, 'ipv4', 'virtual_ipv4')) - ipv4ToInt(pick(b, 'ipv4', 'virtual_ipv4'))) * dir;
+        }
+        if (col === 'lat_ms') {
+          return (parseNumericLatency(pick(a, 'lat_ms')) - parseNumericLatency(pick(b, 'lat_ms'))) * dir;
+        }
+        if (col === 'loss_rate') {
+          return (parseNumericLoss(pick(a, 'loss_rate')) - parseNumericLoss(pick(b, 'loss_rate'))) * dir;
+        }
+        if (col === 'rx_bytes') {
+          const ta = parseNumericBytes(pick(a, 'rx_bytes')) + parseNumericBytes(pick(a, 'tx_bytes'));
+          const tb = parseNumericBytes(pick(b, 'rx_bytes')) + parseNumericBytes(pick(b, 'tx_bytes'));
+          return (ta - tb) * dir;
+        }
+        const va = String(pick(a, col)).toLowerCase();
+        const vb = String(pick(b, col)).toLowerCase();
+        return va.localeCompare(vb, 'zh-CN') * dir;
+      });
+
+      document.querySelectorAll('.sort-indicator').forEach(el => {
+        if (el.dataset.col === state.sortCol) {
+          el.textContent = state.sortAsc ? '↑' : '↓';
+          el.className = 'sort-indicator text-indigo-500 font-bold';
+        } else {
+          el.textContent = '';
+          el.className = 'sort-indicator';
+        }
+      });
+
+      if (!filtered.length) {
+        $('rows').innerHTML = '';
+        $('cardsViewWrap').innerHTML = '';
+        $('emptyState').classList.remove('hidden');
+        return;
+      }
+      $('emptyState').classList.add('hidden');
+
+      $('rows').innerHTML = filtered.map((p, idx) => {
+        const relay = relayDisplay(p);
+        const ip = relay ? '-' : pick(p, 'ipv4', 'virtual_ipv4');
+        const host = relay ? relay.hostname : pick(p, 'hostname');
+        const geo = resolvePeerGeo(p, idx);
+        const cost = relay ? relay.cost : String(pick(p, 'cost'));
+        const kind = classifyConn(cost, p);
+        const latRaw = pick(p, 'lat_ms');
+        const latNum = parseNumericLatency(latRaw);
+        const lossRaw = pick(p, 'loss_rate');
+        const lossNum = parseNumericLoss(lossRaw);
+        const rx = formatBytes(pick(p, 'rx_bytes'));
+        const tx = formatBytes(pick(p, 'tx_bytes'));
+        const proto = pick(p, 'tunnel_proto');
+        const nat = natZh(pick(p, 'nat_type'));
+
+        const badgeClass = kind === 'p2p'
+          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 ok'
+          : kind === 'relay'
+          ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 warn'
+          : kind === 'local'
+          ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20'
+          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700';
+
+        const latColor = latNum >= 999999 ? 'text-slate-400'
+          : latNum < 200 ? 'text-emerald-600 dark:text-emerald-400'
+          : latNum < 300 ? 'text-amber-600 dark:text-amber-400'
+          : 'text-rose-600 dark:text-rose-400';
+
+        const lossColor = lossNum > 0
+          ? 'text-rose-600 dark:text-rose-400 font-semibold'
+          : 'text-slate-600 dark:text-slate-400';
+
+        return `<tr data-peer-idx="${idx}" class="peer-row group hover:bg-slate-50/90 dark:hover:bg-slate-800/40 transition-colors cursor-pointer">
+          <td class="py-3.5 px-4 sm:px-6 whitespace-nowrap">
+            <div class="inline-flex items-center gap-2">
+              <span class="font-mono-num font-medium text-slate-900 dark:text-slate-100">${esc(ip)}</span>
+              <button type="button" data-copy-ip="${esc(ip)}" class="copy-ip-btn opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-opacity" title="复制虚拟 IP">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+            </div>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
+            ${esc(host)}
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap">
+            <div class="font-mono-num text-xs text-slate-700 dark:text-slate-300">${esc(geo.wanIp)}</div>
+            ${geo.wanIpv6 ? `<div class="font-mono-num text-[11px] text-slate-500 dark:text-slate-400 break-all">${esc(geo.wanIpv6)}</div>` : ''}
+            <div class="text-[11px] text-slate-400">${esc(geo.city || '-')}</div>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeClass}">
+              <span class="w-1.5 h-1.5 rounded-full bg-current"></span>
+              ${esc(cost)}
+            </span>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${latColor}">
+            ${(latRaw === '-' || (latNum < 1 && latNum < 999999)) ? '-' : `${esc(latRaw)}`}
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${lossColor}">
+            ${esc(String(lossRaw).includes('%') || lossRaw === '-' ? lossRaw : `${lossRaw}%`)}
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num text-xs text-slate-600 dark:text-slate-300">
+            <span class="text-emerald-600 dark:text-emerald-400">${esc(rx)}</span>
+            <span class="mx-1 text-slate-300 dark:text-slate-600">/</span>
+            <span class="text-indigo-600 dark:text-indigo-400">${esc(tx)}</span>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap">
+            <span class="px-2 py-0.5 rounded-md text-xs font-mono bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60">
+              ${esc(proto)}
+            </span>
+          </td>
+          <td class="py-3.5 px-4 sm:pr-6 whitespace-nowrap text-xs font-mono text-slate-600 dark:text-slate-400">
+            ${esc(nat)}
+          </td>
+        </tr>`;
+      }).join('');
+
+      $('cardsViewWrap').innerHTML = filtered.map((p, idx) => {
+        const relay = relayDisplay(p);
+        const ip = relay ? '-' : pick(p, 'ipv4', 'virtual_ipv4');
+        const host = relay ? relay.hostname : pick(p, 'hostname');
+        const geo = resolvePeerGeo(p, idx);
+        const cost = relay ? relay.cost : String(pick(p, 'cost'));
+        const kind = classifyConn(cost, p);
+        const latRaw = pick(p, 'lat_ms');
+        const latNumCard = parseNumericLatency(latRaw);
+        const latColorCard = latNumCard >= 999999 ? 'text-slate-400'
+          : latNumCard < 200 ? 'text-emerald-600 dark:text-emerald-400'
+          : latNumCard < 300 ? 'text-amber-600 dark:text-amber-400'
+          : 'text-rose-600 dark:text-rose-400';
+        const lossRaw = pick(p, 'loss_rate');
+        const rx = formatBytes(pick(p, 'rx_bytes'));
+        const tx = formatBytes(pick(p, 'tx_bytes'));
+        const proto = pick(p, 'tunnel_proto');
+        const nat = natZh(pick(p, 'nat_type'));
+
+        const badgeClass = kind === 'p2p'
+          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+          : kind === 'relay'
+          ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+          : 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20';
+
+        return `<div data-peer-idx="${idx}" class="peer-card group rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-4 hover:border-indigo-500/40 transition-all cursor-pointer space-y-3">
+          <div class="flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              ${(() => { const pv = providerFor(host); return pv ? `<a href="${pv.url}" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 mb-1" title="${esc(pv.name)}">${pv.svg}<span class="text-[11px] font-medium text-slate-500 dark:text-slate-400">${esc(pv.name)}</span></a>` : ''; })()}
+              <h4 class="font-semibold text-sm text-slate-900 dark:text-white truncate">${esc(host)} ${geo.city ? `(${esc(geo.city)})` : ''}</h4>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="font-mono-num text-xs text-slate-500 dark:text-slate-400">${esc(ip)} · WAN: ${esc(geo.wanIp)}${geo.wanIpv6 ? ` / ${esc(geo.wanIpv6)}` : ''}</span>
+                <button type="button" data-copy-ip="${esc(ip)}" class="copy-ip-btn p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200" title="复制虚拟 IP">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeClass}">${esc(cost)}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200/60 dark:border-slate-800/60 text-xs">
+            <div>
+              <span class="text-slate-400 block text-[11px]">延迟 ms</span>
+              <span class="font-mono-num font-medium ${latColorCard}">${(latRaw === '-' || (latNumCard < 1 && latNumCard < 999999)) ? '-' : esc(latRaw)}</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[11px]">丢包</span>
+              <span class="font-mono-num font-medium text-slate-800 dark:text-slate-200">${esc(lossRaw)}</span>
+            </div>
+            <div>
+              <span class="text-slate-400 block text-[11px]">协议</span>
+              <span class="font-mono font-medium text-slate-800 dark:text-slate-200">${esc(proto)}</span>
+            </div>
+          </div>
+          <div class="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 pt-1">
+            <span class="font-mono-num">${esc(rx)} / ${esc(tx)}</span>
+            <span class="font-mono">NAT: ${esc(nat)}</span>
+          </div>
+        </div>`;
+      }).join('');
+
+      state.filteredPeers = filtered;
+    }
+
+    function openPeerModal(peer, idx = 0) {
+      if (!peer) return;
+      state.selectedPeerRaw = peer;
+      const relay = relayDisplay(peer);
+      const ip = relay ? '-' : pick(peer, 'ipv4', 'virtual_ipv4');
+      const host = relay ? relay.hostname : pick(peer, 'hostname');
+      const geo = resolvePeerGeo(peer, idx);
+      $('modalPeerTitle').textContent = relay ? '中继' : `${host} (${ip})`;
+      const fields = [
+        ['虚拟 IP (ipv4)', ip],
+        ['主机名 (hostname)', host],
+        ['WAN IP', `${geo.wanIp}${geo.wanIpv6 ? ' / ' + geo.wanIpv6 : ''}`],
+        ['地区', `${geo.city || '-'}`],
+        ['连接方式 (cost)', relay ? relay.cost : pick(peer, 'cost')],
+        ['延迟 (lat_ms)', `${pick(peer, 'lat_ms')}`],
+        ['丢包率 (loss_rate)', pick(peer, 'loss_rate')],
+        ['隧道协议 (tunnel_proto)', pick(peer, 'tunnel_proto')],
+        ['NAT 类型', natZh(pick(peer, 'nat_type'))],
+        ['收 / 发 (rx / tx)', `${formatBytes(pick(peer, 'rx_bytes'))} / ${formatBytes(pick(peer, 'tx_bytes'))}`],
+        ['版本 (version)', pick(peer, 'version')]
+      ];
+      $('modalPeerGrid').innerHTML = fields.map(([k, v]) => `
+        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800">
+          <div class="text-[11px] text-slate-400">${esc(k)}</div>
+          <div class="font-mono-num font-medium text-slate-800 dark:text-slate-100 mt-0.5 truncate">${esc(v)}</div>
+        </div>
+      `).join('');
+      $('modalPeerRaw').textContent = JSON.stringify(peer, null, 2);
+      $('peerModal').classList.remove('hidden');
+      $('peerModal').classList.add('flex');
+    }
+
+    function renderGeoOverrideModalList() {
+      const peers = state.currentPeers || [];
+      $('geoOverrideList').innerHTML = peers.map((p, idx) => {
+        const vip = pick(p, 'ipv4', 'virtual_ipv4');
+        const host = pick(p, 'hostname');
+        const geo = resolvePeerGeo(p, idx);
+        return `<div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-4 gap-2 items-center" data-override-vip="${esc(vip)}">
+          <div>
+            <div class="font-semibold text-slate-800 dark:text-slate-200 truncate">${esc(host)}</div>
+            <div class="font-mono text-[11px] text-slate-400">${esc(vip)}</div>
+          </div>
+          <input type="text" data-field="city" value="${esc(geo.city)}" placeholder="地区 (如 广州 / 东京)" class="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
+          <input type="text" data-field="wan_ip" value="${esc(geo.wanIp === '-' ? '' : geo.wanIp)}" placeholder="节点 WAN IP" class="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs">
+          <input type="text" data-field="coords" value="${geo.located ? `${geo.lat.toFixed(2)}, ${geo.lon.toFixed(2)}` : ''}" placeholder="纬度, 经度（留空则不上图）" class="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs">
+        </div>`;
+      }).join('');
+
+      document.querySelectorAll('[data-override-vip] input').forEach(inp => {
+        inp.addEventListener('change', e => {
+          const row = e.target.closest('[data-override-vip]');
+          const vip = row.getAttribute('data-override-vip');
+          const city = row.querySelector('[data-field="city"]').value.trim();
+          const wan_ip = row.querySelector('[data-field="wan_ip"]').value.trim();
+          const coords = row.querySelector('[data-field="coords"]').value.split(',').map(s => parseFloat(s.trim()));
+          userGeoOverrides[vip] = {
+            city,
+            wan_ip,
+            lat: Number.isFinite(coords[0]) ? coords[0] : null,
+            lon: Number.isFinite(coords[1]) ? coords[1] : null
+          };
+          saveGeoOverrides();
+          renderDashboard();
+          showToast(`已更新节点 ${vip} 地理配置`);
+        });
+      });
+    }
+
+    async function fetchEvents() {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch('/api/events?limit=200', { cache: 'no-store', signal: ctrl.signal });
+        clearTimeout(timer);
+        if (r.status === 401) { location.href = '/login'; return; }
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j && Array.isArray(j.events)) {
+          state.events = j.events;
+          renderEvents();
+        }
+      } catch (e) {}
+    }
+
+    function renderEvents() {
+      const el = $('eventsList');
+      if (!el) return;
+      if (!state.events.length) {
+        el.innerHTML = '<div class="text-xs text-slate-500 dark:text-slate-400">暂无变化事件</div>';
+        return;
+      }
+      const label = { join: '加入', leave: '离开', ip_change: '换 IP' };
+      el.innerHTML = state.events.map(e => {
+        const t = new Date(e.at).toLocaleString('zh-CN', { hour12: false });
+        return `<div class="flex flex-wrap items-baseline gap-2 py-1.5 border-b border-slate-100 dark:border-slate-800/60 last:border-0 text-xs">
+          <span class="font-mono-num text-slate-400">${esc(t)}</span>
+          <span class="font-medium text-slate-800 dark:text-slate-200">${esc(label[e.type] || e.type)}</span>
+          <span class="font-mono-num">${esc(e.ip)}</span>
+          <span>${esc(e.hostname || '')}</span>
+          <span class="text-slate-400">上报源 ${esc(e.reporter || '')}</span>
+        </div>`;
+      }).join('');
+    }
+
+    async function tick() {
+      const icon = $('refreshIcon');
+      icon.classList.add('rotate-180');
+      setTimeout(() => icon.classList.remove('rotate-180'), 400);
+
+      // Live only: a failed fetch keeps the previous REAL payload and shows
+      // an error banner. It never falls back to demo/mock data.
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        const r = await fetch('/api/peers', { cache: 'no-store', signal: ctrl.signal });
+        clearTimeout(timer);
+        if (r.status === 401) { location.href = '/login'; return; }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (!j || !Array.isArray(j.reporters)) throw new Error('Invalid schema');
+        state.payload = j;
+        state.lastError = '';
+        $('errorBanner').classList.add('hidden');
+        setLiveStatus(true);
+      } catch (e) {
+        state.lastError = String(e && e.message ? e.message : e);
+        $('errorBannerText').textContent = `实时接口连接失败（${state.lastError}），已保留上一份真实数据，不会用演示数据代替。请检查看板鉴权或 Worker 状态后重试。`;
+        $('errorBanner').classList.remove('hidden');
+        setLiveStatus(false, '实时接口失败');
+      }
+
+      // Relay health is independent of reporter snapshots (GET /relay is public).
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        const r = await fetch('/relay', { cache: 'no-store', signal: ctrl.signal });
+        clearTimeout(timer);
+        if (r.ok) state.relayHealth = await r.json();
+      } catch (e) {}
+
+      renderDashboard();
+      fetchEvents();
+    }
+
+    function initTheme() {
+      try {
+        const saved = localStorage.getItem('et_hub_theme');
+        if (saved === 'dark') {
+          document.documentElement.classList.add('dark');
+        } else if (saved === 'light') {
+          document.documentElement.classList.remove('dark');
+        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+    }
+
+    function initMapInteractions() {
+      const svg = $('geoMapCanvas');
+      const tooltip = $('mapTooltip');
+      let dragging = false;
+      let startX = 0, startY = 0;
+
+      svg.addEventListener('mousedown', e => {
+        if (e.target.closest('.svg-map-node')) return;
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+      });
+
+      window.addEventListener('mousemove', e => {
+        if (dragging) {
+          const rect = svg.getBoundingClientRect();
+          const scaleX = SVG_W / Math.max(1, rect.width);
+          const scaleY = SVG_H / Math.max(1, rect.height);
+          const dx = (e.clientX - startX) * scaleX;
+          const dy = (e.clientY - startY) * scaleY;
+          startX = e.clientX;
+          startY = e.clientY;
+          state.mapPanX += dx;
+          state.mapPanY += dy;
+          renderSvgGeoMap();
+          return;
+        }
+
+        const nodeEl = e.target.closest?.('.svg-map-node');
+        if (nodeEl && state.screenNodes) {
+          const idx = parseInt(nodeEl.getAttribute('data-node-idx'), 10);
+          const sn = state.screenNodes.find(n => n.idx === idx);
+          if (sn) {
+            const rect = svg.getBoundingClientRect();
+            const vip = pick(sn.peer, 'ipv4', 'virtual_ipv4');
+            const lat = pick(sn.peer, 'lat_ms');
+            const nat = natZh(pick(sn.peer, 'nat_type'));
+            tooltip.innerHTML = `
+              <div class="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full" style="background:${esc(sn.color)}"></span>
+                ${esc(sn.displayTitle)}
+              </div>
+              <div class="mt-1.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 font-mono text-[11px] space-y-0.5 text-slate-600 dark:text-slate-300">
+                <div>虚拟 IP: <span class="text-indigo-600 dark:text-cyan-400 font-semibold">${esc(vip)}</span></div>
+                <div>WAN IP: <span class="text-emerald-600 dark:text-emerald-400 font-semibold">${esc(sn.geo.wanIp)}</span></div>
+                <div>连接 / 协议: ${esc(sn.cost)} · ${esc(sn.proto)}</div>
+                <div>延迟 / NAT: ${esc(lat)} ms · ${esc(nat)}</div>
+              </div>
+            `;
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+            tooltip.style.left = `${Math.min(rect.width - 220, Math.max(12, px + 16))}px`;
+            tooltip.style.top = `${Math.min(rect.height - 110, Math.max(12, py - 20))}px`;
+            tooltip.classList.remove('hidden');
+            return;
+          }
+        }
+        tooltip.classList.add('hidden');
+      });
+
+      window.addEventListener('mouseup', () => {
+        dragging = false;
+      });
+
+      svg.addEventListener('click', e => {
+        const nodeEl = e.target.closest?.('.svg-map-node');
+        if (nodeEl && state.screenNodes) {
+          const idx = parseInt(nodeEl.getAttribute('data-node-idx'), 10);
+          const sn = state.screenNodes.find(n => n.idx === idx);
+          if (sn) openPeerModal(sn.peer, sn.idx);
+        }
+      });
+
+      svg.addEventListener('wheel', e => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.15 : 0.87;
+        state.mapZoom = Math.min(4.5, Math.max(0.55, state.mapZoom * factor));
+        renderSvgGeoMap();
+      }, { passive: false });
+
+      $('btnZoomIn').addEventListener('click', () => {
+        state.mapZoom = Math.min(4.5, state.mapZoom * 1.25);
+        renderSvgGeoMap();
+      });
+      $('btnZoomOut').addEventListener('click', () => {
+        state.mapZoom = Math.max(0.55, state.mapZoom * 0.8);
+        renderSvgGeoMap();
+      });
+      $('btnZoomReset').addEventListener('click', () => {
+        state.mapZoom = 1.0;
+        state.mapPanX = 0;
+        state.mapPanY = 0;
+        renderSvgGeoMap();
+      });
+
+      document.querySelectorAll('.map-preset-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.mapPreset = btn.getAttribute('data-map-preset');
+          state.mapZoom = 1.0;
+          state.mapPanX = 0;
+          state.mapPanY = 0;
+          document.querySelectorAll('.map-preset-btn').forEach(b => {
+            if (b.getAttribute('data-map-preset') === state.mapPreset) {
+              b.className = 'map-preset-btn px-2.5 py-1 rounded-md font-medium bg-indigo-600 text-white shadow-2xs transition-colors';
+            } else {
+              b.className = 'map-preset-btn px-2.5 py-1 rounded-md font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors';
+            }
+          });
+          renderSvgGeoMap();
+        });
+      });
+
+      $('btnToggleMap').addEventListener('click', () => {
+        state.mapCollapsed = !state.mapCollapsed;
+        $('mapBodyWrap').classList.toggle('hidden', state.mapCollapsed);
+        $('btnToggleMap').textContent = state.mapCollapsed ? '展开地图' : '收起地图';
+        if (!state.mapCollapsed) renderSvgGeoMap();
+      });
+    }
+
+    function bootEasyTierHub() {
+      if (window.__etHubBooted) return;
+      window.__etHubBooted = true;
+
+      initTheme();
+      initMapInteractions();
+
+      renderDashboard();
+      tick();
+
+      $('btnLogout').addEventListener('click', async () => {
+        try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
+        location.href = '/login';
+      });
+
+      $('btnTheme').addEventListener('click', () => {
+        const isDark = document.documentElement.classList.toggle('dark');
+        try { localStorage.setItem('et_hub_theme', isDark ? 'dark' : 'light'); } catch (e) {}
+        renderSvgGeoMap();
+      });
+
+
+      $('btnRetryLive').addEventListener('click', () => {
+        tick();
+      });
+
+      $('btnRefresh').addEventListener('click', () => {
+        state.countdown = 10;
+        $('countdownText').textContent = '10s';
+        tick();
+      });
+
+      $('reporterSelect').addEventListener('change', e => {
+        state.selectedReporter = e.target.value;
+        renderDashboard();
+      });
+
+      document.querySelectorAll('.filter-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.filter = btn.dataset.filter;
+          document.querySelectorAll('.filter-tab').forEach(b => {
+            if (b.dataset.filter === state.filter) {
+              b.className = 'filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-indigo-600 text-white shadow-2xs';
+            } else {
+              b.className = 'filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800';
+            }
+          });
+          renderPeersList();
+        });
+      });
+
+      $('searchInput').addEventListener('input', e => {
+        state.search = e.target.value;
+        renderPeersList();
+      });
+
+      window.addEventListener('keydown', e => {
+        if (e.key === '/' && document.activeElement !== $('searchInput') && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+          e.preventDefault();
+          $('searchInput').focus();
+        } else if (e.key === 'Escape') {
+          ['peerModal', 'geoModal'].forEach(id => {
+            $(id).classList.add('hidden');
+            $(id).classList.remove('flex');
+          });
+        }
+      });
+
+      document.querySelectorAll('th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+          const col = th.dataset.sort;
+          if (state.sortCol === col) {
+            state.sortAsc = !state.sortAsc;
+          } else {
+            state.sortCol = col;
+            state.sortAsc = true;
+          }
+          renderPeersList();
+        });
+      });
+
+      $('btnViewTable').addEventListener('click', () => {
+        state.viewMode = 'table';
+        $('tableViewWrap').classList.remove('hidden');
+        $('cardsViewWrap').classList.add('hidden');
+        $('btnViewTable').className = 'px-2.5 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-2xs transition-all';
+        $('btnViewCards').className = 'px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-all';
+      });
+
+      $('btnViewCards').addEventListener('click', () => {
+        state.viewMode = 'cards';
+        $('cardsViewWrap').classList.remove('hidden');
+        $('tableViewWrap').classList.add('hidden');
+        $('btnViewCards').className = 'px-2.5 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-2xs transition-all';
+        $('btnViewTable').className = 'px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-all';
+      });
+
+      function handlePeerContainerClick(e) {
+        if (e.target.closest('a')) return;
+        const copyBtn = e.target.closest('.copy-ip-btn');
+        if (copyBtn) {
+          e.stopPropagation();
+          const ip = copyBtn.getAttribute('data-copy-ip');
+          copyText(ip, `已复制虚拟 IP: ${ip}`);
+          return;
+        }
+        const rowOrCard = e.target.closest('[data-peer-idx]');
+        if (rowOrCard && state.filteredPeers) {
+          const idx = parseInt(rowOrCard.getAttribute('data-peer-idx'), 10);
+          openPeerModal(state.filteredPeers[idx], idx);
+        }
+      }
+      $('rows').addEventListener('click', handlePeerContainerClick);
+      $('cardsViewWrap').addEventListener('click', handlePeerContainerClick);
+
+      $('btnClosePeerModal').addEventListener('click', () => {
+        $('peerModal').classList.add('hidden');
+        $('peerModal').classList.remove('flex');
+      });
+      $('peerModal').addEventListener('click', e => {
+        if (e.target === $('peerModal')) {
+          $('peerModal').classList.add('hidden');
+          $('peerModal').classList.remove('flex');
+        }
+      });
+      $('btnCopyPeerJson').addEventListener('click', () => {
+        if (state.selectedPeerRaw) {
+          copyText(JSON.stringify(state.selectedPeerRaw, null, 2), '已复制节点 JSON 数据');
+        }
+      });
+
+      if ($('btnOpenGeoModal')) $('btnOpenGeoModal').addEventListener('click', () => {
+        renderGeoOverrideModalList();
+        $('geoModal').classList.remove('hidden');
+        $('geoModal').classList.add('flex');
+      });
+      $('btnCloseGeoModal').addEventListener('click', () => {
+        $('geoModal').classList.add('hidden');
+        $('geoModal').classList.remove('flex');
+      });
+      $('geoModal').addEventListener('click', e => {
+        if (e.target === $('geoModal')) {
+          $('geoModal').classList.add('hidden');
+          $('geoModal').classList.remove('flex');
+        }
+      });
+      $('btnResetGeoOverrides').addEventListener('click', () => {
+        userGeoOverrides = {};
+        saveGeoOverrides();
+        renderGeoOverrideModalList();
+        renderDashboard();
+        showToast('已恢复默认节点地理配置');
+      });
+
+
+
+      setInterval(() => {
+        state.countdown = state.countdown <= 1 ? 10 : state.countdown - 1;
+        $('countdownText').textContent = `${state.countdown}s`;
+        if (state.countdown === 10) {
+          tick();
+        }
+      }, 1000);
+    }
+
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', bootEasyTierHub);
+    } else {
+      bootEasyTierHub();
+    }
+  </script>
+</body>
+</html>

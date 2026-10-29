@@ -1,5 +1,14 @@
 import { createEasyTierCloudflare } from "@easytier/cloudflare";
 import { DurableObject } from "cloudflare:workers";
+// Pages are bundled into the Worker script (see src/pages.ts, generated from
+// public/*.html) instead of Workers Static Assets: the assets-upload-session
+// API kept failing 500/code 10013, and an Assets-based /login looped 307.
+import { LOGIN_HTML, DASHBOARD_HTML } from "./pages";
+
+const html = (body: string) =>
+  new Response(body, {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
 
 // Env 由 `wrangler types` 生成；可选的 Basic Auth 变量在这里补充声明
 type E = Env & { DASH_USER?: string; DASH_PASS?: string };
@@ -45,6 +54,38 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// easytier-cli 的流量是带单位字串（如 "4.51 MB"、"47.25 kB"，humansize DECIMAL，
+// 即 1000 进制），Number() 直接转会得 NaN；按数字 + 单位解析才是真实字节数。
+function parseBytes(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v !== "string") return null;
+  const m = v.trim().match(/^([\d.]+)\s*(B|KB|MB|GB|TB)?$/i);
+  if (!m) return null;
+  const mult = { B: 1, KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3, TB: 1000 ** 4 }[
+    (m[2] || "B").toUpperCase()
+  ] ?? 1;
+  return parseFloat(m[1]) * mult;
+}
+
+function isPublicIpv4(ip: string): boolean {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return false;
+  return !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(ip);
+}
+
+// 上报里节点对象原样含敏感配置（网络密钥等）与公网地址，入库前剥离，
+// 只留展示用的身份字段；WAN 与坐标在入库前抽出来，写进上报节点自己的 peer 行。
+function sanitizeNode(node: unknown): Record<string, unknown> | null {
+  if (!node || typeof node !== "object") return null;
+  const o = node as Record<string, unknown>;
+  const { config: _c, stun_info: _s, ip_list: _i, ...rest } = o;
+  return rest;
+}
+
+function sanitizeSnap(s: Snap): Snap {
+  const data = (s.data ?? {}) as Record<string, unknown>;
+  return { ...s, data: { ...data, node: sanitizeNode(data.node) } };
+}
+
 // 从上报的 peer 表抽出紧凑统计；兼容数组或 { peers | items } 两种形状
 function peerStats(data: unknown): PeerStat[] {
   const raw = Array.isArray(data)
@@ -62,8 +103,8 @@ function peerStats(data: unknown): PeerStat[] {
       id,
       hostname: String(o.hostname ?? ""),
       lat: num(o.lat_ms),
-      rx: num(o.rx_bytes),
-      tx: num(o.tx_bytes),
+      rx: parseBytes(o.rx_bytes),
+      tx: parseBytes(o.tx_bytes),
       rx_rate: null,
       tx_rate: null,
     });
@@ -130,7 +171,8 @@ export class StatusObject extends DurableObject<E> {
     const out: Snap[] = [];
     for (const [k, v] of all) {
       if (now - v.at > STALE_PURGE_MS) await this.ctx.storage.delete(k);
-      else out.push(v);
+      // 输出时再过滤一次：即使是修复前存入的旧快照，也不再外泄敏感字段
+      else out.push(sanitizeSnap(v));
     }
     return out;
   }
@@ -196,13 +238,48 @@ async function relayHealth(req: Request, env: E, ctx: ExecutionContext) {
   }
 }
 
-function dashAuthOk(req: Request, env: E): boolean {
+// ---------- 看板鉴权：会话 Cookie 为主，Basic 兼容 API 客户端 ----------
+// 原生浏览器 Basic 弹窗太丑且无法做“退出登录”，改成自定义登录页：
+// 登录成功后 Worker 发一个 HMAC 签名的会话 Cookie（密钥就是 DASH_PASS，
+// Cookie 里只含过期时间 + 签名，不含用户名密码本身）。未登录时：
+//  - 浏览器访问页面 -> 302 跳 /login，不再发 www-authenticate（不弹原生框）
+//  - /api/* 请求 -> 401 JSON，不弹原生框，前端据此跳 /login
+//  - 直接带 Basic 头的 API 客户端（如 curl -u）仍可用，不破坏旧用法。
+const SESSION_COOKIE = "et_hub_session";
+const b64url = (bytes: Uint8Array) => {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+async function sessionSig(env: E, exp: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(env.DASH_PASS ?? ""),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`easytier-hub-session:${exp}`));
+  return b64url(new Uint8Array(sig));
+}
+async function sessionOk(req: Request, env: E): Promise<boolean> {
+  if (!env.DASH_PASS) return false;
+  const m = (req.headers.get("cookie") ?? "").match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
+  if (!m) return false;
+  const [expStr, sig] = decodeURIComponent(m[1]).split(".");
+  const exp = Number(expStr);
+  if (!Number.isFinite(exp) || exp * 1000 < Date.now() || !sig) return false;
+  return safeEq(sig, await sessionSig(env, exp));
+}
+async function dashAuthOk(req: Request, env: E): Promise<boolean> {
   if (!env.DASH_USER || !env.DASH_PASS) return true;
   const h = req.headers.get("authorization") ?? "";
-  if (!h.startsWith("Basic ")) return false;
-  try {
-    return safeEq(atob(h.slice(6)), `${env.DASH_USER}:${env.DASH_PASS}`);
-  } catch { return false; }
+  if (h.startsWith("Basic ")) {
+    try {
+      if (safeEq(atob(h.slice(6)), `${env.DASH_USER}:${env.DASH_PASS}`)) return true;
+    } catch { /* fall through to session check */ }
+  }
+  return sessionOk(req, env);
+}
+function clearSessionCookie(): string {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
 // ---------- 路由 ----------
@@ -232,19 +309,117 @@ export default {
       const reporter = String(body.reporter ?? "");
       if (!/^[\w.-]{1,64}$/.test(reporter)) return new Response("bad reporter", { status: 400 });
 
+      // 上报节点的 WAN：优先取节点自身 STUN 结果里的公网 IPv4，
+      // 其次取 Cloudflare 看到的来源 IP；坐标取 Cloudflare 对该来源 IP 的
+      // 地理位置（真实请求属性，不是猜的）。peer 表本身不带这些字段，
+      // 所以只写进上报节点自己的那一行，其他节点仍为空，不编造。
+      const nodeObj = (body.node ?? {}) as Record<string, unknown>;
+      const stun = (nodeObj.stun_info ?? {}) as Record<string, unknown>;
+      const pubList = Array.isArray(stun.public_ip) ? stun.public_ip.map(String) : [];
+      let wan = pubList.find(isPublicIpv4) ?? "";
+      if (!wan) {
+        const cfIp = req.headers.get("cf-connecting-ip") ?? "";
+        if (isPublicIpv4(cfIp)) wan = cfIp;
+      }
+      // IPv6：STUN 列表里的第一个全球单播地址（不含 ::1、fe80、fc00/fd00）
+      const wan6 = pubList.find((ip) => ip.includes(":")
+        && !ip.startsWith("::1") && !ip.toLowerCase().startsWith("fe80")
+        && !ip.toLowerCase().startsWith("fc") && !ip.toLowerCase().startsWith("fd")) ?? "";
+      const cf = (req as unknown as { cf?: { latitude?: string; longitude?: string; city?: string; country?: string } }).cf;
+      const geoLat = cf?.latitude ? Number(cf.latitude) : NaN;
+      const geoLon = cf?.longitude ? Number(cf.longitude) : NaN;
+      const hasGeo = Number.isFinite(geoLat) && Number.isFinite(geoLon) && (geoLat !== 0 || geoLon !== 0);
+      const geoCity = typeof cf?.city === "string" ? cf.city : "";
+      const geoCountry = typeof cf?.country === "string" ? cf.country : "";
+      let peers: unknown = body.peers ?? null;
+      if (Array.isArray(peers) && (wan || wan6 || hasGeo || geoCity || geoCountry)) {
+        const localIp = String(nodeObj.ipv4_addr ?? "").split("/")[0];
+        const localHost = String(nodeObj.hostname ?? "");
+        peers = peers.map((p) => {
+          if (!p || typeof p !== "object") return p;
+          const o = p as Record<string, unknown>;
+          const isLocal = String(o.cost ?? "") === "Local"
+            || (localIp && String(o.ipv4 ?? "") === localIp)
+            || (localHost && String(o.hostname ?? "") === localHost);
+          if (!isLocal) return p;
+          return {
+            ...o,
+            ...(wan ? { wan_ip: wan, wan_ipv4: wan } : {}),
+            ...(wan6 ? { wan_ipv6: wan6 } : {}),
+            ...(hasGeo ? { lat: geoLat, lon: geoLon } : {}),
+            ...(geoCity ? { city: geoCity } : {}),
+            ...(geoCountry ? { country: geoCountry } : {}),
+          };
+        });
+      }
+
       const relay = await relayHealth(req, env, ctx);
       await env.STATUS.getByName("main").report({
         reporter, at: Date.now(), relay,
-        data: { peers: body.peers ?? null, node: body.node ?? null },
+        data: { peers, node: sanitizeNode(body.node) },
       });
       return new Response(null, { status: 204 });
     }
 
-    // 3) 看板 + 数据接口（可选 Basic Auth）
-    if (!dashAuthOk(req, env)) {
-      return new Response("auth required", {
-        status: 401, headers: { "www-authenticate": 'Basic realm="easytier-hub"' },
+    // 2.5) 登录 / 退出 / 登录页（公开，不走看板鉴权）
+    if (p === "/login") {
+      if (await dashAuthOk(req, env)) {
+        return Response.redirect(new URL("/", req.url), 302);
+      }
+      return html(LOGIN_HTML);
+    }
+    if (p === "/login.html") {
+      return Response.redirect(new URL("/login", req.url), 302);
+    }
+    if (p === "/api/login") {
+      if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+      let username = "", password = "", remember = false, isForm = false;
+      const ct = req.headers.get("content-type") ?? "";
+      try {
+        if (ct.includes("application/json")) {
+          const b = await req.json() as { username?: unknown; password?: unknown; remember?: unknown };
+          username = String(b.username ?? "");
+          password = String(b.password ?? "");
+          remember = b.remember === true || b.remember === "true" || b.remember === "on";
+        } else {
+          const f = await req.formData();
+          username = String(f.get("username") ?? "");
+          password = String(f.get("password") ?? "");
+          remember = f.get("remember") === "on" || f.get("remember") === "true";
+          isForm = true;
+        }
+      } catch { return json({ ok: false, error: "bad request" }, 400); }
+      if (!env.DASH_USER || !env.DASH_PASS) {
+        return isForm ? Response.redirect(new URL("/", req.url), 302) : json({ ok: true });
+      }
+      if (!safeEq(username, env.DASH_USER) || !safeEq(password, env.DASH_PASS)) {
+        return json({ ok: false, error: "用户名或密码错误" }, 401);
+      }
+      const maxAge = remember ? 7 * 24 * 3600 : 24 * 3600;
+      const exp = Math.floor(Date.now() / 1000) + maxAge;
+      const cookie = `${SESSION_COOKIE}=${exp}.${await sessionSig(env, exp)}; Path=/; HttpOnly; Secure; SameSite=Lax${remember ? `; Max-Age=${maxAge}` : ""}`;
+      if (isForm) {
+        return new Response(null, { status: 302, headers: { location: "/", "set-cookie": cookie } });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200, headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": cookie },
       });
+    }
+    if (p === "/api/logout") {
+      if (req.method === "GET") {
+        return new Response(null, { status: 302, headers: { location: "/login", "set-cookie": clearSessionCookie() } });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200, headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": clearSessionCookie() },
+      });
+    }
+
+    // 3) 看板 + 数据接口（会话 Cookie 或 Basic，失败不再弹原生框）
+    if (!(await dashAuthOk(req, env))) {
+      if (p.startsWith("/api/")) {
+        return json({ ok: false, error: "auth required" }, 401);
+      }
+      return Response.redirect(new URL("/login", req.url), 302);
     }
     if (p === "/api/peers") {
       const reporters = await env.STATUS.getByName("main").snapshot();
@@ -264,6 +439,7 @@ export default {
       );
       return json({ now: Date.now(), events });
     }
-    return env.ASSETS.fetch(req);
+    if (p === "/") return html(DASHBOARD_HTML);
+    return new Response("not found", { status: 404 });
   },
 } satisfies ExportedHandler<E>;

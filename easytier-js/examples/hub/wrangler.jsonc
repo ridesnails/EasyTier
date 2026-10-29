@@ -1,1 +1,48 @@
-{"$schema":"node_modules/wrangler/config-schema.json","assets":{"binding":"ASSETS","directory":"./public","not_found_handling":"single-page-application","run_worker_first":true},"compatibility_date":"2026-09-05","compatibility_flags":["nodejs_compat"],"durable_objects":{"bindings":[{"class_name":"EasyTierCoreObject","name":"EASYTIER_CORE"},{"class_name":"StatusObject","name":"STATUS"}]},"main":"src/worker.ts","migrations":[{"new_sqlite_classes":["EasyTierCoreObject","StatusObject"],"tag":"v1"}],"name":"easytier-hub","secrets":{"required":["EASYTIER_NETWORK_SECRET","REPORT_TOKEN","DASH_USER","DASH_PASS"]},"vars":{"EASYTIER_NETWORK_NAME":"easytier-hub-test"}}
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "compatibility_date": "2026-09-05",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "EasyTierCoreObject",
+        "name": "EASYTIER_CORE"
+      },
+      {
+        "class_name": "StatusObject",
+        "name": "STATUS"
+      }
+    ]
+  },
+  "main": "src/worker.ts",
+  "migrations": [
+    {
+      "new_sqlite_classes": [
+        "EasyTierCoreObject",
+        "StatusObject"
+      ],
+      "tag": "v1"
+    }
+  ],
+  "name": "easytier-hub",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "et.yi.uy",
+      "custom_domain": true
+    }
+  ],
+  "secrets": {
+    "required": [
+      "EASYTIER_NETWORK_SECRET",
+      "REPORT_TOKEN",
+      "DASH_USER",
+      "DASH_PASS"
+    ]
+  },
+  "vars": {
+    "EASYTIER_NETWORK_NAME": "etnet"
+  }
+}

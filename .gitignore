@@ -50,3 +50,6 @@ easytier-gui/src-tauri/*.sys
 # contrib
 go.sum
 .test-env/
+
+# Local test-network secrets (test values only, never commit)
+.hub-test-secrets.json

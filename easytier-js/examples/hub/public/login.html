@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyTier Hub</title>
+<style>
+  * { box-sizing: border-box; }
+  :root { color-scheme: light; --bg:#fff; --card:#fff; --fg:#111827; --mut:#6b7280; --line:#e5e7eb; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+    font:14px/1.5 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; color:var(--fg); background:var(--bg); }
+  .card { width:100%; max-width:360px; }
+  .wordmark { text-align:center; font-size:40px; font-weight:800; letter-spacing:-.03em; line-height:1.1; margin:0 0 32px; }
+  .wordmark .easy, .wordmark .hub { background:linear-gradient(90deg,#34d399,#a3e635 45%,#facc15); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  label { display:block; font-size:13px; font-weight:600; margin:16px 0 6px; }
+  input[type=text], input[type=password] { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+    background:var(--card); color:var(--fg); font-size:14px; outline:none; }
+  input:focus { border-color:#9ca3af; }
+  .pw-wrap { position:relative; }
+  .pw-wrap input { padding-right:44px; }
+  .pw-wrap button { position:absolute; right:6px; top:50%; transform:translateY(-50%); border:0; background:none;
+    color:var(--mut); font-size:12px; padding:6px 8px; cursor:pointer; }
+  .row { display:flex; align-items:center; gap:8px; margin:16px 0 20px; color:var(--mut); font-size:13px; }
+  .row label { margin:0; font-weight:400; cursor:pointer; }
+  button.submit { width:100%; padding:12px; border:0; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
+    background:linear-gradient(90deg,#34d399,#a3e635 45%,#facc15); color:#111827; }
+  button.submit:disabled { opacity:.6; cursor:default; }
+  .err { display:none; margin:0 0 16px; padding:10px 12px; border-radius:10px; font-size:13px; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; }
+  .err.show { display:block; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1 class="wordmark"><span class="easy">EasyTier</span> <span class="hub">Hub</span></h1>
+  <div id="err" class="err" role="alert"></div>
+  <form id="loginForm" action="/api/login" method="post" autocomplete="on">
+    <label for="username">用户名</label>
+    <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+    <label for="password">密码</label>
+    <div class="pw-wrap">
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="button" id="togglePw" aria-label="显示或隐藏密码">显示</button>
+    </div>
+    <div class="row">
+      <input id="remember" name="remember" type="checkbox" value="on" checked>
+      <label for="remember">保持登录 7 天</label>
+    </div>
+    <button id="submitBtn" class="submit" type="submit">登录</button>
+  </form>
+</main>
+<script>
+  const form = document.getElementById('loginForm');
+  const err = document.getElementById('err');
+  const btn = document.getElementById('submitBtn');
+  const pw = document.getElementById('password');
+  document.getElementById('togglePw').addEventListener('click', () => {
+    const show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password';
+    document.getElementById('togglePw').textContent = show ? '隐藏' : '显示';
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.classList.remove('show');
+    btn.disabled = true;
+    btn.textContent = '正在登录…';
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: document.getElementById('username').value,
+          password: pw.value,
+          remember: document.getElementById('remember').checked
+        })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) {
+        const next = new URLSearchParams(location.search).get('next');
+        location.href = next && next.startsWith('/') ? next : '/';
+      } else {
+        err.textContent = (j && j.error) || '登录失败';
+        err.classList.add('show');
+        pw.focus();
+      }
+    } catch (_) {
+      err.textContent = '网络错误';
+      err.classList.add('show');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '登录';
+    }
+  });
+</script>
+</body>
+</html>
