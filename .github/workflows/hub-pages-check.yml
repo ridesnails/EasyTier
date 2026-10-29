@@ -1,0 +1,41 @@
+name: EasyTier Hub pages consistency
+
+# src/pages.ts 是 public/*.html 的生成物，Worker 实际返回的是它。
+# 只改 public/index.html 而忘记重生成，线上就会出现"源码里明明改过、行为却没变"的怪现象，
+# 且 review 里几乎看不出来（大家只读 public/index.html）。这里把它变成一条会红的检查。
+
+on:
+  push:
+    paths:
+      - "easytier-js/examples/hub/public/**"
+      - "easytier-js/examples/hub/src/pages.ts"
+      - "easytier-js/examples/hub/scripts/**"
+      - "easytier-js/examples/hub/package.json"
+      - ".github/workflows/hub-pages-check.yml"
+  pull_request:
+    paths:
+      - "easytier-js/examples/hub/public/**"
+      - "easytier-js/examples/hub/src/pages.ts"
+      - "easytier-js/examples/hub/scripts/**"
+      - "easytier-js/examples/hub/package.json"
+      - ".github/workflows/hub-pages-check.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: src/pages.ts 必须等于 public/*.html 的生成结果
+        run: python3 easytier-js/examples/hub/scripts/regenerate-pages.py --check

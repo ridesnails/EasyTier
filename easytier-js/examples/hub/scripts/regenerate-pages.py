@@ -11,7 +11,12 @@ Assets），而 src/worker.ts 只 `import { LOGIN_HTML, DASHBOARD_HTML } from ".
 只改 public/*.html 而不跑本脚本，线上看到的仍是旧内容 —— 这类"两份 HTML 漂移"的
 bug 在 review 里几乎看不出来，所以生成脚本必须入库、必须能逐字节复现。
 
-用法：  python3 scripts/regenerate-pages.py    （或 npm run gen:pages）
+用法：
+    python3 scripts/regenerate-pages.py          生成（或 npm run gen:pages）
+    python3 scripts/regenerate-pages.py --check  只校验，不一致则退出码 1（或 npm run check:pages）
+
+--check 给 CI 用：谁改了 public/*.html 却没重新生成 src/pages.ts，流水线直接红，
+不用等线上出现"改了没生效"这种诡异现象。
 """
 from __future__ import annotations
 
@@ -38,8 +43,29 @@ def build() -> str:
     )
 
 
+def first_diff(a: str, b: str) -> str:
+    n = min(len(a), len(b))
+    i = next((k for k in range(n) if a[k] != b[k]), n)
+    return (
+        f"first difference at char {i} (generated {len(a)} / on disk {len(b)})\n"
+        f"  generated: {a[max(0, i - 60):i + 60]!r}\n"
+        f"  on disk  : {b[max(0, i - 60):i + 60]!r}"
+    )
+
+
 def main() -> int:
     generated = build()
+    current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
+
+    if "--check" in sys.argv[1:]:
+        if generated == current:
+            print(f"{OUT.relative_to(HUB)} is up to date ({len(generated)} chars)")
+            return 0
+        print(f"ERROR: {OUT.relative_to(HUB)} does not match public/*.html", file=sys.stderr)
+        print(first_diff(generated, current), file=sys.stderr)
+        print("Run `python3 scripts/regenerate-pages.py` (or `npm run gen:pages`) and commit the result.", file=sys.stderr)
+        return 1
+
     OUT.write_text(generated, encoding="utf-8")
     print(f"wrote {OUT.relative_to(HUB)} ({len(generated)} chars)")
     return 0

@@ -12,7 +12,8 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "types": "wrangler types",
-    "gen:pages": "python3 scripts/regenerate-pages.py"
+    "gen:pages": "python3 scripts/regenerate-pages.py",
+    "check:pages": "python3 scripts/regenerate-pages.py --check"
   },
   "type": "module",
   "version": "0.1.0"
