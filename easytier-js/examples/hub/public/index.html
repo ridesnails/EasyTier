@@ -14,16 +14,29 @@ table{width:100%;border-collapse:collapse;background:var(--card);border-radius:1
 th,td{padding:10px 12px;text-align:left;border-bottom:1px solid #8882;white-space:nowrap}
 th{color:var(--mut);font-weight:500}
 .ok{color:var(--ok)!important}.warn{color:var(--warn)!important}.bad{color:var(--bad)!important}
+.tabs{display:flex;gap:8px;margin:4px 0 16px}.tabs button{border:1px solid #8884;background:var(--card);color:var(--mut);border-radius:999px;padding:6px 14px;cursor:pointer;font:inherit}.tabs button.on{color:var(--fg);border-color:var(--ok)}select{background:var(--card);color:var(--fg);border:1px solid #8884;border-radius:8px;padding:6px 8px;font:inherit}
 </style></head><body><main>
 <h2>EasyTier Hub</h2>
-<div class="cards">
+<div class="tabs"><button data-tab="live" class="on">实时</button><button data-tab="hist">历史</button><button data-tab="events">事件</button></div>
+<section id="view-live"><div class="cards">
   <div class="card">Relay<b id="relay">-</b><span id="conn"></span></div>
   <div class="card">节点数<b id="count">-</b></div>
   <div class="card">数据来源<b id="src">-</b><span id="age"></span></div>
 </div>
 <div class="wrap"><table>
 <thead><tr><th>虚拟 IP</th><th>主机名</th><th>连接</th><th>延迟 ms</th><th>丢包</th><th>收 / 发</th><th>协议</th><th>NAT</th></tr></thead>
-<tbody id="rows"></tbody></table></div>
+<tbody id="rows"></tbody></table></div></section>
+<section id="view-hist" hidden><div class="cards">
+  <div class="card">上报者<select id="hist-rep"></select><span id="hist-state"></span></div>
+  <div class="card">历史条数<b id="hist-n">-</b><span id="hist-range"></span></div>
+  <div class="card">在线状态<b id="hist-online">-</b><span id="hist-dur"></span></div>
+</div>
+<div class="wrap"><table>
+<thead><tr><th>虚拟 IP</th><th>主机名</th><th>首次出现</th><th>最后出现</th><th>平均延迟 ms</th><th>收 / 发</th><th>速率 收/发</th></tr></thead>
+<tbody id="hist-rows"></tbody></table></div></section>
+<section id="view-events" hidden><div class="wrap"><table>
+<thead><tr><th>时间</th><th>类型</th><th>虚拟 IP</th><th>主机名</th><th>上报者</th></tr></thead>
+<tbody id="evt-rows"></tbody></table></div></section>
 </main><script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'-').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -54,5 +67,55 @@ async function tick(){
 <td>${esc(pick(p,'nat_type'))}</td></tr>`}).join('');
   }catch(e){$('src').textContent='拉取失败'}
 }
+const fmtT=t=>new Date(t).toLocaleString();
+const fmtB=n=>{if(n==null)return '-';const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toFixed(n>=100||i===0?0:1)+' '+u[i]};
+const fmtR=n=>n==null?'-':fmtB(n)+'/s';
+async function loadHist(){
+  try{
+    const pr=await (await fetch('/api/peers',{cache:'no-store'})).json();
+    const reps=(pr.reporters||[]).sort((a,b)=>b.at-a.at);
+    const sel=$('hist-rep');
+    const cur=sel.value;
+    sel.innerHTML=reps.map(r=>`<option>${esc(r.reporter)}</option>`).join('')||'<option value="">（暂无上报者）</option>';
+    if(reps.some(r=>r.reporter===cur))sel.value=cur;
+    const rep=sel.value;
+    if(!rep){$('hist-state').textContent='暂无上报';$('hist-n').textContent='-';$('hist-online').textContent='-';$('hist-rows').innerHTML='';return}
+    const j=await (await fetch('/api/history?reporter='+encodeURIComponent(rep)+'&limit=1000',{cache:'no-store'})).json();
+    const es=j.entries||[];
+    $('hist-n').textContent=es.length;
+    $('hist-range').textContent=es.length?`${fmtT(es[0].at)} ~ ${fmtT(es[es.length-1].at)}`:'';
+    $('hist-state').textContent='';
+    if(!es.length){$('hist-online').textContent='无数据';$('hist-rows').innerHTML='';return}
+    const last=es[es.length-1], age=Math.round((j.now-last.at)/1000);
+    $('hist-online').textContent=age>300?'离线':age>45?'数据已过期':'在线';
+    $('hist-online').className=age>300?'bad':age>45?'warn':'ok';
+    $('hist-dur').textContent=`最近上报 ${age}s 前`;
+    const agg={};
+    for(const e of es)for(const p of (e.peers||[])){
+      const a=agg[p.id]||(agg[p.id]={id:p.id,host:p.hostname,first:e.at,last:e.at,lat:[],rx:p.rx,tx:p.tx,rr:p.rx_rate,tr:p.tx_rate});
+      a.last=e.at;if(p.lat!=null)a.lat.push(p.lat);a.rx=p.rx;a.tx=p.tx;a.rr=p.rx_rate;a.tr=p.tx_rate;
+    }
+    $('hist-rows').innerHTML=Object.values(agg).map(a=>{
+      const avg=a.lat.length?Math.round(a.lat.reduce((x,y)=>x+y,0)/a.lat.length):'-';
+      return `<tr><td>${esc(a.id)}</td><td>${esc(a.host)}</td><td>${fmtT(a.first)}</td><td>${fmtT(a.last)}</td><td>${avg}</td><td>${fmtB(a.rx)} / ${fmtB(a.tx)}</td><td>${fmtR(a.rr)} / ${fmtR(a.tr)}</td></tr>`}).join('');
+  }catch(e){$('hist-state').textContent='拉取失败'}
+}
+const evtName=t=>({join:'上线',leave:'离线',ip_change:'IP 变化'}[t]||t);
+async function loadEvents(){
+  try{
+    const j=await (await fetch('/api/events?limit=200',{cache:'no-store'})).json();
+    $('evt-rows').innerHTML=(j.events||[]).map(e=>{
+      const cls=e.type==='join'?'ok':e.type==='leave'?'bad':'warn';
+      return `<tr><td>${fmtT(e.at)}</td><td class="${cls}">${evtName(e.type)}</td><td>${esc(e.ip)}</td><td>${esc(e.hostname)}</td><td>${esc(e.reporter)}</td></tr>`}).join('')||'<tr><td colspan="5">暂无事件（需节点先上报）</td></tr>';
+  }catch(e){$('evt-rows').innerHTML='<tr><td colspan="5">拉取失败</td></tr>'}
+}
+$('hist-rep').onchange=loadHist;
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  for(const v of ['live','hist','events'])$( 'view-'+v).hidden=v!==b.dataset.tab;
+  if(b.dataset.tab==='hist')loadHist();
+  if(b.dataset.tab==='events')loadEvents();
+});
 tick();setInterval(tick,10000);
+setInterval(()=>{if(!$('view-hist').hidden)loadHist();if(!$('view-events').hidden)loadEvents()},30000);
 </script></body></html>
