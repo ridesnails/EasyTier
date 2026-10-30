@@ -78,7 +78,7 @@ Worker 侧优先级：`body.geo`（agent 显式配置）> `req.cf`（按请求�
 
 `et-report.sh` 早期用 `date -Is`，BSD date 会报 `invalid argument 's'`；已改为
 `now_iso()` 可移植写法。另外主域名 `et.yi.uy` 在部分网络下 TLS 握手会拖到 20s+，
-curl 超时已放宽到 20s，必要时把 `ET_HUB_URL` 指向 workers.dev 备用域。
+curl 超时默认 25s（`ET_TIMEOUT`），并支持 `ET_HUB_FALLBACK`：主域名失败才回落备用域。
 
 ### 2b. 主域名优先，备用域只做回落
 
@@ -102,6 +102,6 @@ ET_TIMEOUT=25                                                     # 默认 25s
 ```xml
 <key>ProgramArguments</key><array>
   <string>/bin/bash</string><string>-c</string>
-  <string>set -a; . /etc/easytier/report.env; exec /bin/bash /usr/local/bin/et-report.sh</string>
+  <string>set -a; . /etc/et-report.env; exec /bin/bash /usr/local/bin/et-report.sh</string>
 </array>
 ```
