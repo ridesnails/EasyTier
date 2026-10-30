@@ -698,9 +698,11 @@
       const num = Number(val);
       if (!Number.isFinite(num)) return String(val);
       if (num === 0) return '0 B';
+      // 与 parseNumericBytes 保持一致用 1000（easytier-cli 的 humansize 是 DECIMAL）；
+      // idx 必须夹到 >=0，否则 0.9 B 这种值会取到 units[-1]，渲染成 "922 undefined"。
       const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const idx = Math.min(Math.floor(Math.log(num) / Math.log(1024)), units.length - 1);
-      const scaled = num / Math.pow(1024, idx);
+      const idx = Math.min(Math.max(0, Math.floor(Math.log(num) / Math.log(1000))), units.length - 1);
+      const scaled = num / Math.pow(1000, idx);
       return `${scaled >= 100 || idx === 0 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[idx]}`;
     }
 
@@ -1252,6 +1254,16 @@
     }
 
     function renderDashboard() {
+      try {
+        renderDashboardInner();
+      } catch (e) {
+        // 一条脏数据（null reporter / 非数组 peers）不该让面板永久停在半渲染状态
+        console.error('renderDashboard failed', e);
+        showToast(`渲染失败：${e && e.message ? e.message : e}`);
+      }
+    }
+
+    function renderDashboardInner() {
       const j = state.payload;
       if (!j) return;
 
@@ -1394,8 +1406,9 @@
       const col = state.sortCol;
       const dir = state.sortAsc ? 1 : -1;
       filtered.sort((a, b) => {
-        const aLocal = String(pick(a, 'cost')) === 'Local';
-        const bLocal = String(pick(b, 'cost')) === 'Local';
+        const isLocalCost = v => String(pick(v, 'cost')).trim().toLowerCase() === 'local';
+        const aLocal = isLocalCost(a);
+        const bLocal = isLocalCost(b);
         if (aLocal !== bLocal) return aLocal ? -1 : 1;
         if (col === 'ipv4') {
           return (ipv4ToInt(pick(a, 'ipv4', 'virtual_ipv4')) - ipv4ToInt(pick(b, 'ipv4', 'virtual_ipv4'))) * dir;
@@ -1674,6 +1687,20 @@
     }
 
     async function tick() {
+      // 互斥：上一轮没结束就不开新的一轮。
+      // 之前两处请求超时合计 8s+5s=13s > 10s 轮询周期，慢网下旧响应会覆盖新快照。
+      if (state.tickInFlight) return;
+      state.tickInFlight = true;
+      try {
+        await tickOnce();
+      } catch (e) {
+        console.error('tick failed', e);
+      } finally {
+        state.tickInFlight = false;
+      }
+    }
+
+    async function tickOnce() {
       const icon = $('refreshIcon');
       icon.classList.add('rotate-180');
       setTimeout(() => icon.classList.remove('rotate-180'), 400);
@@ -1682,7 +1709,7 @@
       // an error banner. It never falls back to demo/mock data.
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 8000);
+        const timer = setTimeout(() => ctrl.abort(), 6000);
         const r = await fetch('/api/peers', { cache: 'no-store', signal: ctrl.signal });
         clearTimeout(timer);
         if (r.status === 401) { location.href = '/login'; return; }
@@ -1703,7 +1730,7 @@
       // Relay health is independent of reporter snapshots (GET /relay is public).
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 5000);
+        const timer = setTimeout(() => ctrl.abort(), 4000);
         const r = await fetch('/relay', { cache: 'no-store', signal: ctrl.signal });
         clearTimeout(timer);
         if (r.ok) state.relayHealth = await r.json();
