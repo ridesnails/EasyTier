@@ -10,6 +10,10 @@ ET_CLI="${ET_CLI:-easytier-cli}"
 ET_RPC="${ET_RPC:-127.0.0.1:15888}"
 ET_REPORTER="${ET_REPORTER:-$(hostname -s)}"
 ET_INTERVAL="${ET_INTERVAL:-120}"
+# 可选：节点自报坐标。用于"上报出网被代理/NAT 污染"的节点（例如主路由的所有 HTTPS
+# 都走本机 sing-box 出去，Cloudflare 会把来源 IP 判成海外代理节点）。设了这组变量，
+# Worker 会用这里的坐标而不是按请求来源 IP 反查。
+#   ET_LAT=30.5928 ET_LON=114.3055 ET_CITY=Wuhan ET_COUNTRY=CN
 
 report_once() {
   local peers node
@@ -17,7 +21,12 @@ report_once() {
   [[ -n "$peers" ]] || peers="[]"
   node="$("$ET_CLI" -p "$ET_RPC" -o json node 2>/dev/null)" || node="null"
   [[ -n "$node" ]] || node="null"
-  printf '{"reporter":"%s","peers":%s,"node":%s}' "$ET_REPORTER" "$peers" "$node" |
+  geo=""
+  if [[ -n "${ET_LAT:-}" && -n "${ET_LON:-}" ]]; then
+    geo=$(printf ',"geo":{"lat":%s,"lon":%s,"city":"%s","country":"%s"}' \
+      "$ET_LAT" "$ET_LON" "${ET_CITY:-}" "${ET_COUNTRY:-}")
+  fi
+  printf '{"reporter":"%s","peers":%s,"node":%s%s}' "$ET_REPORTER" "$peers" "$node" "$geo" |
     curl -fsS -m 20 -X POST "$ET_HUB_URL/api/report" \
       -H "Authorization: Bearer $ET_REPORT_TOKEN" \
       -H "Content-Type: application/json" \

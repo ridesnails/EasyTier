@@ -12,6 +12,8 @@ ET_CLI="${ET_CLI:-easytier-cli}"
 ET_RPC="${ET_RPC:-127.0.0.1:15888}"
 ET_REPORTER="${ET_REPORTER:-$(hostname)}"
 ET_INTERVAL="${ET_INTERVAL:-120}"
+# 可选：自报坐标（同 et-report.sh，适用于上报出网被代理污染的节点）
+#   ET_LAT=30.5928 ET_LON=114.3055 ET_CITY=Wuhan ET_COUNTRY=CN
 
 report_once() {
   peers="$("$ET_CLI" -p "$ET_RPC" -o json peer)" || { echo "cli peer failed" >&2; return 1; }

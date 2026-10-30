@@ -55,6 +55,25 @@ uci add_list easytier.@easytier[0].extra_args='8228'
 uci commit easytier && /etc/init.d/easytier restart
 ```
 
+### 1b. 但「上报进程」不是 EasyTier 流量，仍会被代理接走
+
+`--socket-mark` 只管 EasyTier 自己的 socket。上报是 `curl` 的普通 HTTPS：
+如果节点所有出网都被透明代理接管，Cloudflare 会把**请求来源**判成海外代理出口，
+于是 Worker 按 `req.cf` 反查出来的城市是错的（实测主路由被判定为洛杉矶，
+而它真实 WAN `183.92.24.x` 是对的 —— Worker 优先用 EasyTier STUN 的公网 IP）。
+
+解法是让 agent **自报坐标**（2.7 之后新增的约定，见 `et-report.sh`）：
+
+```sh
+ET_LAT=30.5928
+ET_LON=114.3055
+ET_CITY=Wuhan
+ET_COUNTRY=CN
+```
+
+Worker 侧优先级：`body.geo`（agent 显式配置）> `req.cf`（按请求来源 IP）。
+所以只有"上报出网被污染"的节点需要填这组变量，其余节点留空即可。
+
 ### 2. 上报脚本的 macOS / BSD 兼容
 
 `et-report.sh` 早期用 `date -Is`，BSD date 会报 `invalid argument 's'`；已改为

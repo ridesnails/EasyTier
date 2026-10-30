@@ -304,7 +304,10 @@ export default {
       const len = Number(req.headers.get("content-length") ?? 0);
       if (len > MAX_BODY) return new Response("too large", { status: 413 });
 
-      let body: { reporter?: string; peers?: unknown; node?: unknown };
+      let body: {
+        reporter?: string; peers?: unknown; node?: unknown;
+        geo?: { lat?: number; lon?: number; city?: string; country?: string };
+      };
       try { body = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
       const reporter = String(body.reporter ?? "");
       if (!/^[\w.-]{1,64}$/.test(reporter)) return new Response("bad reporter", { status: 400 });
@@ -325,12 +328,22 @@ export default {
       const wan6 = pubList.find((ip) => ip.includes(":")
         && !ip.startsWith("::1") && !ip.toLowerCase().startsWith("fe80")
         && !ip.toLowerCase().startsWith("fc") && !ip.toLowerCase().startsWith("fd")) ?? "";
+      // 坐标优先级：
+      //   1) 上报自带的 geo（agent 在 env 里显式配置）
+      //      —— 适用「上报出网被代理/NAT 污染」的节点：Cloudflare 看到的是代理出口，
+      //         按请求来源做地理会得到错误城市（例如主路由 qwrt 被判成洛杉矶）。
+      //   2) Cloudflare 对请求来源 IP 的地理（真实请求属性）
       const cf = (req as unknown as { cf?: { latitude?: string; longitude?: string; city?: string; country?: string } }).cf;
-      const geoLat = cf?.latitude ? Number(cf.latitude) : NaN;
-      const geoLon = cf?.longitude ? Number(cf.longitude) : NaN;
+      const bodyGeo = (body.geo && typeof body.geo === "object" ? body.geo : {}) as Record<string, unknown>;
+      const bLat = Number(bodyGeo.lat);
+      const bLon = Number(bodyGeo.lon);
+      const hasBodyGeo = Number.isFinite(bLat) && Number.isFinite(bLon)
+        && Math.abs(bLat) <= 90 && Math.abs(bLon) <= 180 && (bLat !== 0 || bLon !== 0);
+      const geoLat = hasBodyGeo ? bLat : (cf?.latitude ? Number(cf.latitude) : NaN);
+      const geoLon = hasBodyGeo ? bLon : (cf?.longitude ? Number(cf.longitude) : NaN);
       const hasGeo = Number.isFinite(geoLat) && Number.isFinite(geoLon) && (geoLat !== 0 || geoLon !== 0);
-      const geoCity = typeof cf?.city === "string" ? cf.city : "";
-      const geoCountry = typeof cf?.country === "string" ? cf.country : "";
+      const geoCity = hasBodyGeo ? String(bodyGeo.city ?? "") : (typeof cf?.city === "string" ? cf.city : "");
+      const geoCountry = hasBodyGeo ? String(bodyGeo.country ?? "") : (typeof cf?.country === "string" ? cf.country : "");
       let peers: unknown = body.peers ?? null;
       if (Array.isArray(peers) && (wan || wan6 || hasGeo || geoCity || geoCountry)) {
         const localIp = String(nodeObj.ipv4_addr ?? "").split("/")[0];

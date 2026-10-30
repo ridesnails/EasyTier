@@ -647,16 +647,6 @@
           located: true, source: '上报坐标'
         };
       }
-      // 出网被代理污染的节点：按主机名钉死（见 NODE_GEO_HINTS 注释）
-      const hint = NODE_GEO_HINTS[String(host).toLowerCase()];
-      if (hint) {
-        return {
-          city: hint.city || '', subtitle: defaultSubtitle,
-          wanIp, wanIpv6, country: peerCountry || 'CN',
-          lat: hint.lat, lon: hint.lon, routeLabel: '', located: true, source: '主机名修正'
-        };
-      }
-
       // 其它节点：用它自己上报时被 IP 反查到的地理（来自 buildGeoIndex 的汇总，不是按名字猜）
       const known = geoIndex.get(host) || geoIndex.get(vip);
       if (known) {
@@ -836,14 +826,6 @@
     // 每个 reporter 只能反查到自己那一条，所以把「所有 reporter 的自查条目」汇总起来，
     // 别人的视角里也能定位到我 —— 数据仍然来自 Worker 的 IP 反查，不按主机名猜。
     let geoIndex = new Map();
-
-    // 少数节点的 IP 反查会被"自己的出网代理"污染：主路由 qwrt 的 HTTPS 全部走本机
-    // sing-box 出去，Cloudflare 看到的源 IP 是海外代理节点，反查出来就成了洛杉矶，
-    // 而它真实 WAN 是家里宽带（183.92.24.x）。这种机器只能按主机名钉死城市。
-    // 优先级：手动标注 > 这里 > Worker 的 IP 反查 > 未定位。
-    const NODE_GEO_HINTS = {
-      'qwrt': { city: '武汉', lat: 30.5928, lon: 114.3055 }
-    }
 
     // Worker 返回的是 IP 库的英文城市名，这里统一转中文显示
     const CITY_ZH = {
