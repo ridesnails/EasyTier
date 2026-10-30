@@ -10,13 +10,24 @@ ET_CLI="${ET_CLI:-easytier-cli}"
 ET_RPC="${ET_RPC:-127.0.0.1:15888}"
 ET_REPORTER="${ET_REPORTER:-$(hostname -s)}"
 ET_INTERVAL="${ET_INTERVAL:-120}"
+# 可选：主域名失败时的备用域（与主域名是同一个 Worker）。主域名偶尔 TLS 握手会拖到
+# 15s+，超时后自动回落备用域重试一次，而不用把主域名换掉。
+ET_HUB_FALLBACK="${ET_HUB_FALLBACK:-}"
+ET_TIMEOUT="${ET_TIMEOUT:-25}"
 # 可选：节点自报坐标。用于"上报出网被代理/NAT 污染"的节点（例如主路由的所有 HTTPS
 # 都走本机 sing-box 出去，Cloudflare 会把来源 IP 判成海外代理节点）。设了这组变量，
 # Worker 会用这里的坐标而不是按请求来源 IP 反查。
 #   ET_LAT=30.5928 ET_LON=114.3055 ET_CITY=Wuhan ET_COUNTRY=CN
 
+post() {  # $1 = hub base url, $2 = payload file
+  curl -fsS -m "$ET_TIMEOUT" -X POST "$1/api/report" \
+    -H "Authorization: Bearer $ET_REPORT_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$2" >/dev/null
+}
+
 report_once() {
-  local peers node
+  local peers node geo payload
   peers="$("$ET_CLI" -p "$ET_RPC" -o json peer)" || { echo "cli peer failed" >&2; return 1; }
   [[ -n "$peers" ]] || peers="[]"
   node="$("$ET_CLI" -p "$ET_RPC" -o json node 2>/dev/null)" || node="null"
@@ -26,11 +37,17 @@ report_once() {
     geo=$(printf ',"geo":{"lat":%s,"lon":%s,"city":"%s","country":"%s"}' \
       "$ET_LAT" "$ET_LON" "${ET_CITY:-}" "${ET_COUNTRY:-}")
   fi
-  printf '{"reporter":"%s","peers":%s,"node":%s%s}' "$ET_REPORTER" "$peers" "$node" "$geo" |
-    curl -fsS -m 20 -X POST "$ET_HUB_URL/api/report" \
-      -H "Authorization: Bearer $ET_REPORT_TOKEN" \
-      -H "Content-Type: application/json" \
-      --data-binary @- >/dev/null
+  payload="$(mktemp)"
+  printf '{"reporter":"%s","peers":%s,"node":%s%s}' \
+    "$ET_REPORTER" "$peers" "$node" "$geo" > "$payload"
+
+  if post "$ET_HUB_URL" "$payload"; then rm -f "$payload"; return 0; fi
+  if [[ -n "$ET_HUB_FALLBACK" ]]; then
+    echo "$(now_iso) primary hub unreachable, retrying fallback" >&2
+    if post "$ET_HUB_FALLBACK" "$payload"; then rm -f "$payload"; return 0; fi
+  fi
+  rm -f "$payload"
+  return 1
 }
 
 if [[ "${1:-}" == "--once" ]]; then report_once; exit $?; fi

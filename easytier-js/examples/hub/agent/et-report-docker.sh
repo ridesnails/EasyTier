@@ -20,12 +20,25 @@ report_once() {
   [ -n "$peers" ] || peers="[]"
   node="$("$ET_CLI" -p "$ET_RPC" -o json node 2>/dev/null)" || node="null"
   [ -n "$node" ] || node="null"
-  body="{\"reporter\":\"$ET_REPORTER\",\"peers\":$peers,\"node\":$node}"
-  wget -q -O /dev/null --timeout=10 \
-    --header="Authorization: Bearer $ET_REPORT_TOKEN" \
-    --header="Content-Type: application/json" \
-    --post-data="$body" \
-    "$ET_HUB_URL/api/report"
+  geo=""
+  if [ -n "${ET_LAT:-}" ] && [ -n "${ET_LON:-}" ]; then
+    geo=",\"geo\":{\"lat\":$ET_LAT,\"lon\":$ET_LON,\"city\":\"${ET_CITY:-}\",\"country\":\"${ET_COUNTRY:-}\"}"
+  fi
+  body="{\"reporter\":\"$ET_REPORTER\",\"peers\":$peers,\"node\":$node$geo}"
+
+  post_to() {  # $1 = hub base url
+    wget -q -O /dev/null --timeout="$ET_TIMEOUT" \
+      --header="Authorization: Bearer $ET_REPORT_TOKEN" \
+      --header="Content-Type: application/json" \
+      --post-data="$body" \
+      "$1/api/report"
+  }
+
+  if post_to "$ET_HUB_URL"; then return 0; fi
+  if [ -n "$ET_HUB_FALLBACK" ]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) primary hub unreachable, retrying fallback" >&2
+    post_to "$ET_HUB_FALLBACK"
+  fi
 }
 
 if [ "${1:-}" = "--once" ]; then report_once; exit $?; fi

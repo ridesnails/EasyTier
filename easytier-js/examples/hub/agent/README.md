@@ -80,6 +80,20 @@ Worker 侧优先级：`body.geo`（agent 显式配置）> `req.cf`（按请求�
 `now_iso()` 可移植写法。另外主域名 `et.yi.uy` 在部分网络下 TLS 握手会拖到 20s+，
 curl 超时已放宽到 20s，必要时把 `ET_HUB_URL` 指向 workers.dev 备用域。
 
+### 2b. 主域名优先，备用域只做回落
+
+`ET_HUB_URL` 写主域名（`https://et.yi.uy`）。主域名在部分网络下 TLS 握手会偶发拖到
+15s+（实测 IPv4 多数 0.9–3.2s、偶尔 15.5s；IPv6 甚至 20s 超时），但**不要因此把主域名
+换掉** —— 配一个 `ET_HUB_FALLBACK` 即可，主域名失败时自动回落重试一次：
+
+```sh
+ET_HUB_URL=https://et.yi.uy
+ET_HUB_FALLBACK=https://easytier-hub.ridesnail-6a2.workers.dev   # 同一个 Worker
+ET_TIMEOUT=25                                                     # 默认 25s
+```
+
+两个 agent 脚本都按这个顺序发：主域名 → 失败 → 备用域 → 失败才报错。
+
 ### 3. token 不要写进 launchd plist
 
 `co.easytier.report.plist` 的模板里有 `EnvironmentVariables`，但 plist 是 0644 世界可读的。
