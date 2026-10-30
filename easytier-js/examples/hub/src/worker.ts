@@ -11,12 +11,25 @@ const html = (body: string) =>
   });
 
 // Env 由 `wrangler types` 生成；可选的 Basic Auth 变量在这里补充声明
-type E = Env & { DASH_USER?: string; DASH_PASS?: string };
+type E = Env & {
+  DASH_USER?: string; DASH_PASS?: string;
+  // JSON: {"<node>":"<token>"}；设了就按节点分发 token，不再接受共享 REPORT_TOKEN
+  NODE_TOKENS?: string;
+  // "1" = 只接受按节点 token（过渡完成后设置）
+  NODE_TOKENS_STRICT?: string;
+};
 
 const RELAY = "/relay";
 const STALE_PURGE_MS = 24 * 3600 * 1000;
 const MAX_BODY = 512 * 1024;
 const MAX_LOGIN_BODY = 4 * 1024;
+// DO 定时清扫：在此之前只有读接口顺手删过期键，停报节点的 h:/e: 会一直堆
+const SWEEP_INTERVAL_MS = 6 * 3600 * 1000;
+// 登录失败锁定：同一 IP 10 分钟内 5 次失败后拒到窗口结束
+const LOGIN_MAX_FAILS = 5;
+const LOGIN_LOCK_MS = 10 * 60 * 1000;
+// relay 新连接限速：每 IP 每分钟 10 条（浏览器/扫描器会被 Origin 规则先挡掉）
+const RELAY_MAX_PER_MIN = 10;
 // 单次上报的 peer 上限：防止一条上报塞几万个对象把单例 STATUS 拖死
 const MAX_PEERS = 256;
 // 入库白名单：宁可丢字段，也不让上报方决定我们存什么（黑名单会被上游新增字段绕过）
@@ -102,9 +115,7 @@ function keepPeerFields(p: unknown): Record<string, unknown> | null {
 }
 
 // Content-Length 只是声明：缺失、NaN、伪造都能绕过，所以按真实字节流截断。
-type CappedBody =
-  | { ok: true; value: unknown }
-  | { ok: false; reason: "too-large" | "bad-json" };
+type CappedBody = { value: unknown; error: "" | "too-large" | "bad-json" };
 
 async function readCapped(req: Request, max: number): Promise<Uint8Array | null> {
   const cl = Number(req.headers.get("content-length") ?? "");
@@ -132,11 +143,11 @@ async function readCapped(req: Request, max: number): Promise<Uint8Array | null>
 
 async function readJsonCapped(req: Request, max: number): Promise<CappedBody> {
   const bytes = await readCapped(req, max);
-  if (!bytes) return { ok: false, reason: "too-large" };
+  if (!bytes) return { value: null, error: "too-large" };
   try {
-    return { ok: true, value: JSON.parse(new TextDecoder().decode(bytes)) };
+    return { value: JSON.parse(new TextDecoder().decode(bytes)), error: "" };
   } catch {
-    return { ok: false, reason: "bad-json" };
+    return { value: null, error: "bad-json" };
   }
 }
 
@@ -224,6 +235,46 @@ export class StatusObject extends DurableObject<E> {
       await this.ctx.storage.put(`h:${s.reporter}:${padTs(s.at)}`, { at: s.at, peers: cur } satisfies HistEntry);
       await this.ctx.storage.put(`m:${s.reporter}`, { lastHistAt: s.at } satisfies Meta);
     }
+
+    // 没排过清扫就排一个：停报的节点不会再触发读路径，只有定时器能回收它的 h:/e:。
+    if ((await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
+    }
+  }
+
+  // 定时全量清扫：过期快照（24h 未上报）、历史与事件（保留 30 天）。
+  // 之前只在 snapshot/history/events 读路径顺手删，且 list 只扫前 1000 条，
+  // 长期告警/停报节点会把 DO 存储慢慢堆满。
+  async alarm(): Promise<void> {
+    await this.sweep();
+    await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
+  }
+
+  private async sweep(): Promise<void> {
+    const now = Date.now();
+    const cutoff = now - HISTORY_RETENTION_MS;
+    let cursor: string | undefined;
+    for (let page = 0; page < 200; page++) {
+      const rows = await this.ctx.storage.list({ limit: 500, ...(cursor ? { startAfter: cursor } : {}) });
+      if (rows.size === 0) break;
+      const drop: string[] = [];
+      for (const [k, v] of rows) {
+        cursor = k;
+        if (k.startsWith("r:")) {
+          const at = Number((v as Snap | undefined)?.at ?? 0);
+          if (!at || now - at > STALE_PURGE_MS) drop.push(k);
+        } else if (k.startsWith("h:") || k.startsWith("e:")) {
+          const ts = k.startsWith("e:")
+            ? Number(k.slice(2).split(":")[0])
+            : Number(k.slice(k.lastIndexOf(":") + 1));
+          if (Number.isFinite(ts) && ts > 0 && ts < cutoff) drop.push(k);
+        }
+      }
+      for (let i = 0; i < drop.length; i += 128) {
+        await Promise.all(drop.slice(i, i + 128).map((k) => this.ctx.storage.delete(k)));
+      }
+      if (rows.size < 500) break;
+    }
   }
 
   async snapshot(): Promise<Snap[]> {
@@ -279,6 +330,46 @@ export class StatusObject extends DurableObject<E> {
 
 // ---------- 工具函数 ----------
 const enc = new TextEncoder();
+
+// 限速计数放 Cache API：Workers 的内存态只在单个 isolate 里有效（实测同一 IP 连续
+// 失败 6 次仍全部 401），而 Cache 是按 colo 共享的，能真正跨 isolate 生效。
+const RATE_ORIGIN = "https://et-hub-rate.internal/";
+async function rateRead(key: string): Promise<number> {
+  const hit = await caches.default.match(new URL(RATE_ORIGIN + key));
+  if (!hit) return 0;
+  const n = Number(await hit.text());
+  return Number.isFinite(n) ? n : 0;
+}
+async function rateBump(key: string, ttlSec: number): Promise<number> {
+  const next = (await rateRead(key)) + 1;
+  await caches.default.put(
+    new URL(RATE_ORIGIN + key),
+    new Response(String(next), { headers: { "cache-control": `max-age=${ttlSec}` } }),
+  );
+  return next;
+}
+async function rateClear(key: string): Promise<void> {
+  await caches.default.delete(new URL(RATE_ORIGIN + key));
+}
+const loginKey = (ip: string) => `login:${ip}`;
+const relayKey = (ip: string) => `relay:${ip}:${Math.floor(Date.now() / 60_000)}`;
+
+// NODE_TOKENS → Map<token, node>，顺便把非法条目挡掉（node 名必须符合 reporter 正则）
+function parseNodeTokens(raw?: string): Map<string, string> | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    const map = new Map<string, string>();
+    for (const [node, tok] of Object.entries(obj)) {
+      if (!/^[\w.-]{1,64}$/.test(node)) continue;
+      if (typeof tok !== "string" || tok.length < 16) continue;
+      map.set(tok, node);
+    }
+    return map.size ? map : null;
+  } catch {
+    return null;
+  }
+}
 function safeEq(a: string, b: string): boolean {
   const x = enc.encode(a), y = enc.encode(b);
   return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
@@ -374,6 +465,13 @@ export default {
     // 1) relay：WS 原样转发（官方 DO 不校验路径）；普通 GET 返回健康状态
     if (p === RELAY || p.startsWith(RELAY + "/")) {
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        // 浏览器发起的 WebSocket 一定带 Origin；EasyTier 原生客户端不发。
+        // 带 Origin 一律拒绝，避免任意网页把这里当中继通道白嫖（drive-by）。
+        if (req.headers.get("origin")) return new Response("forbidden", { status: 403 });
+        const relayIp = req.headers.get("cf-connecting-ip") ?? "unknown";
+        if ((await rateBump(relayKey(relayIp), 90)) > RELAY_MAX_PER_MIN) {
+          return new Response("too many connections", { status: 429 });
+        }
         return easytier.fetch(req, env, ctx);
       }
       return json(await relayHealth(req, env, ctx));
@@ -383,18 +481,40 @@ export default {
     if (p === "/api/report") {
       if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
       const auth = req.headers.get("authorization") ?? "";
-      if (!safeEq(auth, `Bearer ${env.REPORT_TOKEN}`)) return new Response("unauthorized", { status: 401 });
+      const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+      const nodeTokens = parseNodeTokens(env.NODE_TOKENS);
+      let boundReporter = "";
+      if (nodeTokens) {
+        // 每个节点一个 token：token 决定 reporter，body.reporter 被忽略，
+        // 这样任何一个节点都无法覆盖别人的快照/历史（旧实现共用一个 token，可互相冒名）。
+        for (const [tok, node] of nodeTokens) {
+          if (safeEq(bearer, tok)) {
+            boundReporter = node;
+            break;
+          }
+        }
+        if (!boundReporter) return new Response("unauthorized", { status: 401 });
+        if (!boundReporter) {
+          // 过渡期：NODE_TOKENS 已配好但节点还没换完时，允许共享 token 继续上报
+          // （reporter 仍由 body 决定）。全部换完后把 NODE_TOKENS_STRICT 置 1 收口。
+          const legacyOk = env.NODE_TOKENS_STRICT !== "1"
+            && !!env.REPORT_TOKEN && safeEq(bearer, env.REPORT_TOKEN);
+          if (!legacyOk) return new Response("unauthorized", { status: 401 });
+        }
+      } else if (!env.REPORT_TOKEN || !safeEq(bearer, env.REPORT_TOKEN)) {
+        return new Response("unauthorized", { status: 401 });
+      }
       const parsed = await readJsonCapped(req, MAX_BODY);
-      if (!parsed.ok) {
-        return new Response(parsed.reason === "too-large" ? "too large" : "bad json", {
-          status: parsed.reason === "too-large" ? 413 : 400,
+      if (parsed.error) {
+        return new Response(parsed.error === "too-large" ? "too large" : "bad json", {
+          status: parsed.error === "too-large" ? 413 : 400,
         });
       }
       const body = parsed.value as {
         reporter?: string; peers?: unknown; node?: unknown;
         geo?: { lat?: number; lon?: number; city?: string; country?: string };
       };
-      const reporter = String(body.reporter ?? "");
+      const reporter = boundReporter || String(body.reporter ?? "");
       if (!/^[\w.-]{1,64}$/.test(reporter)) return new Response("bad reporter", { status: 400 });
 
       // 上报节点的 WAN：优先取节点自身 STUN 结果里的公网 IPv4，
@@ -477,6 +597,10 @@ export default {
     }
     if (p === "/api/login") {
       if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+      const loginIp = req.headers.get("cf-connecting-ip") ?? "unknown";
+      if ((await rateRead(loginKey(loginIp))) >= LOGIN_MAX_FAILS) {
+        return json({ ok: false, error: "尝试次数过多，请稍后再试" }, 429);
+      }
       let username = "", password = "", remember = false, isForm = false;
       const ct = req.headers.get("content-type") ?? "";
       // 登录在鉴权门之前，必须自己限体（旧实现用 req.json()/formData，实际无上限）
@@ -501,8 +625,10 @@ export default {
         return isForm ? Response.redirect(new URL("/", req.url), 302) : json({ ok: true });
       }
       if (!safeEq(username, env.DASH_USER) || !safeEq(password, env.DASH_PASS)) {
+        await rateBump(loginKey(loginIp), LOGIN_LOCK_MS / 1000);
         return json({ ok: false, error: "用户名或密码错误" }, 401);
       }
+      await rateClear(loginKey(loginIp));
       const maxAge = remember ? 7 * 24 * 3600 : 24 * 3600;
       const exp = Math.floor(Date.now() / 1000) + maxAge;
       const cookie = `${SESSION_COOKIE}=${exp}.${await sessionSig(env, exp, env.DASH_USER)}; Path=/; HttpOnly; Secure; SameSite=Lax${remember ? `; Max-Age=${maxAge}` : ""}`;

@@ -94,6 +94,20 @@ ET_TIMEOUT=25                                                     # 默认 25s
 
 两个 agent 脚本都按这个顺序发：主域名 → 失败 → 备用域 → 失败才报错。
 
+### 2c. 按节点分发 token（NODE_TOKENS）
+
+共享 `REPORT_TOKEN` 的问题是：任何节点拿到它，就能用别人的 `reporter` 名上报，覆盖对方的
+快照与历史（`/api/peers` 以 reporter 为聚合键）。Worker 支持按节点分发：
+
+- secret `NODE_TOKENS`：JSON，`{"de":"<token>","bwg":"<token>",...}`，每个 token ≥16 字符
+- **token 决定 reporter**：命中哪个 token 就写哪个节点，`body.reporter` 被忽略 → 无法冒名
+- 过渡期：未设 `NODE_TOKENS_STRICT=1` 时仍接受共享 `REPORT_TOKEN`，方便逐台切换；
+  全部换完后把它设为 `1` 收口（此后共享 token 一律 401）
+- 每个节点在自己的 `.env` / `/etc/et-report.env` 里配自己的 token 即可
+
+切换顺序（实测可行）：Worker 先接受两种 → 逐台改节点 `.env` 并重启 reporter → 确认全部
+上报新鲜 → 再把 `NODE_TOKENS_STRICT` 设为 `1`。
+
 ### 3. token 不要写进 launchd plist
 
 `co.easytier.report.plist` 的模板里有 `EnvironmentVariables`，但 plist 是 0644 世界可读的。

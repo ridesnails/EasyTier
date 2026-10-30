@@ -1395,6 +1395,84 @@
     };
     function providerFor(host) { return PROVIDER_MAP[String(host ?? '').trim()] || null; }
 
+    function peerRowHtml(d) {
+        const { idx, ip, host, geo, cost, latRaw, latNum, lossRaw, lossColor, rx, tx, proto, nat, badgeClass, latColor } = d;
+
+        return `<tr data-peer-idx="${idx}" class="peer-row group hover:bg-slate-50/90 dark:hover:bg-slate-800/40 transition-colors cursor-pointer">
+          <td class="py-3.5 px-4 sm:px-6 whitespace-nowrap">
+            <div class="inline-flex items-center gap-2">
+              <span class="font-mono-num font-medium text-slate-900 dark:text-slate-100">${esc(ip)}</span>
+              <button type="button" data-copy-ip="${esc(ip)}" class="copy-ip-btn opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-opacity" title="复制虚拟 IP">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </button>
+            </div>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
+            ${esc(host)}
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap">
+            <div class="font-mono-num text-xs text-slate-700 dark:text-slate-300">${esc(geo.wanIp)}</div>
+            ${geo.wanIpv6 ? `<div class="font-mono-num text-[11px] text-slate-500 dark:text-slate-400 break-all">${esc(geo.wanIpv6)}</div>` : ''}
+            <div class="text-[11px] text-slate-500 dark:text-slate-400">${esc(cityZh(geo.city) || '-')}</div>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeClass}">
+              <span class="w-1.5 h-1.5 rounded-full bg-current"></span>
+              ${esc(cost)}
+            </span>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${latColor}">
+            ${(latRaw === '-' || (latNum < 1 && latNum < 999999)) ? '-' : `${esc(latRaw)}`}
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${lossColor}">
+            ${esc(String(lossRaw).includes('%') || lossRaw === '-' ? lossRaw : `${lossRaw}%`)}
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num text-xs text-slate-600 dark:text-slate-300">
+            <span class="text-emerald-600 dark:text-emerald-400">${esc(rx)}</span>
+            <span class="mx-1 text-slate-300 dark:text-slate-600">/</span>
+            <span class="text-indigo-600 dark:text-indigo-400">${esc(tx)}</span>
+          </td>
+          <td class="py-3.5 px-4 whitespace-nowrap">
+            <span class="px-2 py-0.5 rounded-md text-xs font-mono bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60">
+              ${esc(proto)}
+            </span>
+          </td>
+          <td class="py-3.5 px-4 sm:pr-6 whitespace-nowrap text-xs font-mono text-slate-600 dark:text-slate-400">
+            ${esc(nat)}
+          </td>
+        </tr>`;
+      
+    }
+
+    function peerCardHtml(d) {
+        const { idx, ip, host, geo, cityTxt, cost, badgeClass, latTxt, latColor, lossRaw, lossNum, proto, pv } = d;
+
+        return `<div data-peer-idx="${idx}" class="peer-card group relative overflow-hidden rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:border-indigo-500/50 transition-colors cursor-pointer min-h-[124px]">
+          <!-- 国旗铺满整张卡片做背景 -->
+          ${flagLayer(geo.country)}
+          <!-- 左侧渐变蒙层：保证文字在国旗上也清晰 -->
+          <div class="absolute inset-0 pointer-events-none bg-gradient-to-r from-white/[0.97] via-white/[0.90] to-white/[0.42] dark:from-[#0b1220]/[0.97] dark:via-[#0b1220]/[0.90] dark:to-[#0b1220]/[0.42]"></div>
+          <div class="relative p-3.5 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="h-[22px] w-[104px] shrink-0">${pv ? pv.mark.replace('<svg ', '<svg class="w-full h-full" ') : ''}</div>
+              <span class="shrink-0 px-2 py-0.5 rounded-md text-[11px] font-medium border ${badgeClass}">${esc(cost)}</span>
+            </div>
+            <div class="min-w-0">
+              <div class="font-semibold text-[13px] text-slate-900 dark:text-white truncate">${esc(host)}</div>
+              <div class="text-[11px] text-slate-700 dark:text-slate-200 truncate">${esc(cityTxt || '-')} · <span class="font-mono-num">${esc(ip)}</span></div>
+            </div>
+            <div class="flex items-center gap-3 text-[11px]">
+              <span class="font-mono-num ${latColor}">${latTxt}</span>
+              <span class="font-mono-num ${lossNum > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-700 dark:text-slate-200'}">丢包 ${esc(lossRaw)}</span>
+              <span class="font-mono text-slate-600 dark:text-slate-300">${esc(proto)}</span>
+            </div>
+          </div>
+        </div>`;
+      
+    }
+
     // 表格与卡片原来各写一份 60 行派生逻辑，已经漂移过（badge 分支不一致）。
     // 现在统一在这里算一次，两个视图只负责排版。
     function deriveRow(p, idx) {
@@ -1505,81 +1583,9 @@
 
       const derived = filtered.map((p, idx) => deriveRow(p, idx));
 
-      const rowsHtml = derived.map((d) => {
-        const { idx, ip, host, geo, cost, latRaw, latNum, lossRaw, lossColor, rx, tx, proto, nat, badgeClass, latColor } = d;
+      const rowsHtml = derived.map(peerRowHtml).join('');
 
-        return `<tr data-peer-idx="${idx}" class="peer-row group hover:bg-slate-50/90 dark:hover:bg-slate-800/40 transition-colors cursor-pointer">
-          <td class="py-3.5 px-4 sm:px-6 whitespace-nowrap">
-            <div class="inline-flex items-center gap-2">
-              <span class="font-mono-num font-medium text-slate-900 dark:text-slate-100">${esc(ip)}</span>
-              <button type="button" data-copy-ip="${esc(ip)}" class="copy-ip-btn opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-opacity" title="复制虚拟 IP">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            </div>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
-            ${esc(host)}
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap">
-            <div class="font-mono-num text-xs text-slate-700 dark:text-slate-300">${esc(geo.wanIp)}</div>
-            ${geo.wanIpv6 ? `<div class="font-mono-num text-[11px] text-slate-500 dark:text-slate-400 break-all">${esc(geo.wanIpv6)}</div>` : ''}
-            <div class="text-[11px] text-slate-500 dark:text-slate-400">${esc(cityZh(geo.city) || '-')}</div>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap">
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeClass}">
-              <span class="w-1.5 h-1.5 rounded-full bg-current"></span>
-              ${esc(cost)}
-            </span>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${latColor}">
-            ${(latRaw === '-' || (latNum < 1 && latNum < 999999)) ? '-' : `${esc(latRaw)}`}
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${lossColor}">
-            ${esc(String(lossRaw).includes('%') || lossRaw === '-' ? lossRaw : `${lossRaw}%`)}
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num text-xs text-slate-600 dark:text-slate-300">
-            <span class="text-emerald-600 dark:text-emerald-400">${esc(rx)}</span>
-            <span class="mx-1 text-slate-300 dark:text-slate-600">/</span>
-            <span class="text-indigo-600 dark:text-indigo-400">${esc(tx)}</span>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap">
-            <span class="px-2 py-0.5 rounded-md text-xs font-mono bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60">
-              ${esc(proto)}
-            </span>
-          </td>
-          <td class="py-3.5 px-4 sm:pr-6 whitespace-nowrap text-xs font-mono text-slate-600 dark:text-slate-400">
-            ${esc(nat)}
-          </td>
-        </tr>`;
-      }).join('');
-
-      const cardsHtml = derived.map((d) => {
-        const { idx, ip, host, geo, cityTxt, cost, badgeClass, latTxt, latColor, lossRaw, lossNum, proto, pv } = d;
-
-        return `<div data-peer-idx="${idx}" class="peer-card group relative overflow-hidden rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:border-indigo-500/50 transition-colors cursor-pointer min-h-[124px]">
-          <!-- 国旗铺满整张卡片做背景 -->
-          ${flagLayer(geo.country)}
-          <!-- 左侧渐变蒙层：保证文字在国旗上也清晰 -->
-          <div class="absolute inset-0 pointer-events-none bg-gradient-to-r from-white/[0.97] via-white/[0.90] to-white/[0.42] dark:from-[#0b1220]/[0.97] dark:via-[#0b1220]/[0.90] dark:to-[#0b1220]/[0.42]"></div>
-          <div class="relative p-3.5 space-y-2">
-            <div class="flex items-center justify-between gap-2">
-              <div class="h-[22px] w-[104px] shrink-0">${pv ? pv.mark.replace('<svg ', '<svg class="w-full h-full" ') : ''}</div>
-              <span class="shrink-0 px-2 py-0.5 rounded-md text-[11px] font-medium border ${badgeClass}">${esc(cost)}</span>
-            </div>
-            <div class="min-w-0">
-              <div class="font-semibold text-[13px] text-slate-900 dark:text-white truncate">${esc(host)}</div>
-              <div class="text-[11px] text-slate-700 dark:text-slate-200 truncate">${esc(cityTxt || '-')} · <span class="font-mono-num">${esc(ip)}</span></div>
-            </div>
-            <div class="flex items-center gap-3 text-[11px]">
-              <span class="font-mono-num ${latColor}">${latTxt}</span>
-              <span class="font-mono-num ${lossNum > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-700 dark:text-slate-200'}">丢包 ${esc(lossRaw)}</span>
-              <span class="font-mono text-slate-600 dark:text-slate-300">${esc(proto)}</span>
-            </div>
-          </div>
-        </div>`;
-      }).join('');
+      const cardsHtml = derived.map(peerCardHtml).join('');
 
       const showCards = state.viewMode === 'cards';
       $('rows').innerHTML = showCards ? '' : rowsHtml;

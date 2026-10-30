@@ -1,3 +1,4 @@
 .dev.vars
 worker-configuration.d.ts
 .wrangler/
+__pycache__/

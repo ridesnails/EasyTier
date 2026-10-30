@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
 
 HUB = pathlib.Path(__file__).resolve().parents[1]
@@ -33,9 +34,44 @@ HEADER = (
 )
 
 
+# 只做"无损压缩"：删 HTML 注释、行尾空白、连续空行和标签之间的缩进。
+# 绝不碰 <script>/<style>/<pre>/<textarea>（内容可能对空白敏感），也不折叠标签之间的
+# 空格（`</span> <span>` 里的那个空格是可见的，折叠会改版式）。
+PROTECTED = re.compile(r"(<(script|style|pre|textarea)\b[^>]*>)(.*?)(</\2>)", re.S | re.I)
+COMMENT = re.compile(r"<!--(?!\[if).*?-->", re.S)
+
+
+def _minify_chunk(chunk: str) -> str:
+    chunk = COMMENT.sub("", chunk)
+    chunk = re.sub(r"[ \t]+\n", "\n", chunk)
+    chunk = re.sub(r"\n{2,}", "\n", chunk)
+    chunk = re.sub(r">[ \t]*\n[ \t]*<", ">\n<", chunk)
+    return chunk
+
+
+def minify_html(html: str) -> str:
+    out: list[str] = []
+    last = 0
+    for m in PROTECTED.finditer(html):
+        out.append(_minify_chunk(html[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_minify_chunk(html[last:]))
+    return "".join(out)
+
+
 def build() -> str:
-    login = (HUB / "public" / "login.html").read_text(encoding="utf-8")
-    dashboard = (HUB / "public" / "index.html").read_text(encoding="utf-8")
+    login_raw = (HUB / "public" / "login.html").read_text(encoding="utf-8")
+    dashboard_raw = (HUB / "public" / "index.html").read_text(encoding="utf-8")
+    login = minify_html(login_raw)
+    dashboard = minify_html(dashboard_raw)
+    print(
+        f"minified: login {len(login_raw)}→{len(login)} "
+        f"({100 - round(len(login) * 100 / len(login_raw))}% off), "
+        f"dashboard {len(dashboard_raw)}→{len(dashboard)} "
+        f"({100 - round(len(dashboard) * 100 / len(dashboard_raw))}% off)",
+        file=sys.stderr,
+    )
     return (
         HEADER
         + "export const LOGIN_HTML = " + json.dumps(login, ensure_ascii=False) + ";\n"
