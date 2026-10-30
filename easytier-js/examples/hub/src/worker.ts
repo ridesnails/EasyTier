@@ -16,6 +16,16 @@ type E = Env & { DASH_USER?: string; DASH_PASS?: string };
 const RELAY = "/relay";
 const STALE_PURGE_MS = 24 * 3600 * 1000;
 const MAX_BODY = 512 * 1024;
+const MAX_LOGIN_BODY = 4 * 1024;
+// 单次上报的 peer 上限：防止一条上报塞几万个对象把单例 STATUS 拖死
+const MAX_PEERS = 256;
+// 入库白名单：宁可丢字段，也不让上报方决定我们存什么（黑名单会被上游新增字段绕过）
+const PEER_KEEP = [
+  "ipv4", "virtual_ipv4", "cidr", "hostname", "cost", "lat_ms", "loss_rate", "rx_bytes", "tx_bytes",
+  "tunnel_proto", "nat_type", "id", "version",
+  "city", "country", "lat", "lon", "wan_ip", "wan_ipv4", "wan_ipv6",
+] as const;
+const NODE_KEEP = ["hostname", "ipv4_addr", "peer_id", "inst_id", "listeners", "version", "feature_flag"] as const;
 
 // 历史与事件：采样 60 秒或 peer 集合变化时存一条，保留 30 天
 const HISTORY_SAMPLE_MS = 60 * 1000;
@@ -77,8 +87,57 @@ function isPublicIpv4(ip: string): boolean {
 function sanitizeNode(node: unknown): Record<string, unknown> | null {
   if (!node || typeof node !== "object") return null;
   const o = node as Record<string, unknown>;
-  const { config: _c, stun_info: _s, ip_list: _i, ...rest } = o;
-  return rest;
+  const out: Record<string, unknown> = {};
+  for (const k of NODE_KEEP) if (o[k] !== undefined) out[k] = o[k];
+  return out;
+}
+
+// peer 行同理：只保留展示需要的字段，既防未知字段入库，也顺手压住体积
+function keepPeerFields(p: unknown): Record<string, unknown> | null {
+  if (!p || typeof p !== "object") return null;
+  const o = p as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of PEER_KEEP) if (o[k] !== undefined) out[k] = o[k];
+  return Object.keys(out).length ? out : null;
+}
+
+// Content-Length 只是声明：缺失、NaN、伪造都能绕过，所以按真实字节流截断。
+type CappedBody =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: "too-large" | "bad-json" };
+
+async function readCapped(req: Request, max: number): Promise<Uint8Array | null> {
+  const cl = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(cl) && cl > max) return null;
+  if (!req.body) return new Uint8Array(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > max) {
+      try { await reader.cancel(); } catch { /* 已断开就算了 */ }
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+  return out;
+}
+
+async function readJsonCapped(req: Request, max: number): Promise<CappedBody> {
+  const bytes = await readCapped(req, max);
+  if (!bytes) return { ok: false, reason: "too-large" };
+  try {
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, reason: "bad-json" };
+  }
 }
 
 function sanitizeSnap(s: Snap): Snap {
@@ -142,7 +201,9 @@ export class StatusObject extends DurableObject<E> {
           evts.push({ at: s.at, type: "leave", ip: p.id, hostname: p.hostname, reporter: s.reporter });
         }
       }
-      for (const e of evts) await this.ctx.storage.put(`e:${e.at}:${e.ip}`, e);
+      for (let i = 0; i < evts.length; i += 64) {
+        await Promise.all(evts.slice(i, i + 64).map((e) => this.ctx.storage.put(`e:${e.at}:${e.ip}`, e)));
+      }
       changed = evts.length > 0;
       // 流量速率：相对上一条快照的增量 / 时间差
       const dt = (s.at - prev.at) / 1000;
@@ -229,13 +290,20 @@ const clampLimit = (v: string | null, def: number, max: number) => {
   return Number.isFinite(n) ? Math.min(Math.max(1, Math.floor(n)), max) : def;
 };
 
+let relayCache: { at: number; value: Record<string, unknown> } | null = null;
 async function relayHealth(req: Request, env: E, ctx: ExecutionContext) {
+  if (relayCache && Date.now() - relayCache.at < 60_000) return relayCache.value;
+  let value: Record<string, unknown>;
   try {
     const r = await easytier.fetch(new Request(new URL("/health", req.url)), env, ctx);
-    return await r.json();
+    value = (await r.json()) as Record<string, unknown>;
   } catch (e) {
-    return { ok: false, state: "error", error: String(e) };
+    // 细节只留在日志侧：对外只报"不可用"，不把内部异常文本交给匿名请求
+    console.error("relay health failed", String(e));
+    value = { ok: false, state: "unavailable" };
   }
+  relayCache = { at: Date.now(), value };
+  return value;
 }
 
 // ---------- 看板鉴权：会话 Cookie 为主，Basic 兼容 API 客户端 ----------
@@ -251,25 +319,31 @@ const b64url = (bytes: Uint8Array) => {
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 };
-async function sessionSig(env: E, exp: number): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw", enc.encode(env.DASH_PASS ?? ""),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+// 会话密钥不直接用 DASH_PASS：先做一次带标签的 SHA-256 派生，
+// 这样即使 cookie 泄漏也不能拿签名去离线爆破口令。
+// 载荷里还签入用户名，改用户名后旧 cookie 自动失效。
+async function sessionSig(env: E, exp: number, user: string): Promise<string> {
+  const seed = await crypto.subtle.digest(
+    "SHA-256", enc.encode(`easytier-hub-session-v1:${env.DASH_PASS ?? ""}`),
   );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`easytier-hub-session:${exp}`));
+  const key = await crypto.subtle.importKey(
+    "raw", seed, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`${user}:${exp}`));
   return b64url(new Uint8Array(sig));
 }
 async function sessionOk(req: Request, env: E): Promise<boolean> {
-  if (!env.DASH_PASS) return false;
+  if (!env.DASH_PASS || !env.DASH_USER) return false;
   const m = (req.headers.get("cookie") ?? "").match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
   if (!m) return false;
   const [expStr, sig] = decodeURIComponent(m[1]).split(".");
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp * 1000 < Date.now() || !sig) return false;
-  return safeEq(sig, await sessionSig(env, exp));
+  return safeEq(sig, await sessionSig(env, exp, env.DASH_USER));
 }
 async function dashAuthOk(req: Request, env: E): Promise<boolean> {
-  if (!env.DASH_USER || !env.DASH_PASS) return true;
+  // fail-closed：缺配置一律不放行（旧实现是 return true，等于 secret 没设就全公开）
+  if (!env.DASH_USER || !env.DASH_PASS) return false;
   const h = req.headers.get("authorization") ?? "";
   if (h.startsWith("Basic ")) {
     try {
@@ -288,6 +362,15 @@ export default {
     const url = new URL(req.url);
     const p = url.pathname;
 
+    // 缺 secret 时优先 503：宁可整站不可用，也不能回落到"匿名可读"。
+    // relay 只依赖 EASYTIER_NETWORK_SECRET，单独放行。
+    if (!p.startsWith(RELAY)) {
+      const missing = !env.DASH_USER || !env.DASH_PASS
+        ? "DASH_USER/DASH_PASS"
+        : (!env.REPORT_TOKEN ? "REPORT_TOKEN" : "");
+      if (missing) return json({ ok: false, error: `hub not configured: ${missing}` }, 503);
+    }
+
     // 1) relay：WS 原样转发（官方 DO 不校验路径）；普通 GET 返回健康状态
     if (p === RELAY || p.startsWith(RELAY + "/")) {
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
@@ -301,14 +384,16 @@ export default {
       if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
       const auth = req.headers.get("authorization") ?? "";
       if (!safeEq(auth, `Bearer ${env.REPORT_TOKEN}`)) return new Response("unauthorized", { status: 401 });
-      const len = Number(req.headers.get("content-length") ?? 0);
-      if (len > MAX_BODY) return new Response("too large", { status: 413 });
-
-      let body: {
+      const parsed = await readJsonCapped(req, MAX_BODY);
+      if (!parsed.ok) {
+        return new Response(parsed.reason === "too-large" ? "too large" : "bad json", {
+          status: parsed.reason === "too-large" ? 413 : 400,
+        });
+      }
+      const body = parsed.value as {
         reporter?: string; peers?: unknown; node?: unknown;
         geo?: { lat?: number; lon?: number; city?: string; country?: string };
       };
-      try { body = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
       const reporter = String(body.reporter ?? "");
       if (!/^[\w.-]{1,64}$/.test(reporter)) return new Response("bad reporter", { status: 400 });
 
@@ -344,26 +429,32 @@ export default {
       const hasGeo = Number.isFinite(geoLat) && Number.isFinite(geoLon) && (geoLat !== 0 || geoLon !== 0);
       const geoCity = hasBodyGeo ? String(bodyGeo.city ?? "") : (typeof cf?.city === "string" ? cf.city : "");
       const geoCountry = hasBodyGeo ? String(bodyGeo.country ?? "") : (typeof cf?.country === "string" ? cf.country : "");
-      let peers: unknown = body.peers ?? null;
-      if (Array.isArray(peers) && (wan || wan6 || hasGeo || geoCity || geoCountry)) {
+      // peer 表：先卡数量（防 DoS），再逐条走白名单（防未知字段入库 / 体积失控）
+      const rawPeers = Array.isArray(body.peers) ? body.peers : null;
+      if (rawPeers && rawPeers.length > MAX_PEERS) {
+        return new Response("too many peers", { status: 413 });
+      }
+      let peers: Record<string, unknown>[] | null = null;
+      if (rawPeers) {
         const localIp = String(nodeObj.ipv4_addr ?? "").split("/")[0];
         const localHost = String(nodeObj.hostname ?? "");
-        peers = peers.map((p) => {
-          if (!p || typeof p !== "object") return p;
-          const o = p as Record<string, unknown>;
+        const out: Record<string, unknown>[] = [];
+        for (const p of rawPeers) {
+          const o = keepPeerFields(p);
+          if (!o) continue;
           const isLocal = String(o.cost ?? "") === "Local"
-            || (localIp && String(o.ipv4 ?? "") === localIp)
-            || (localHost && String(o.hostname ?? "") === localHost);
-          if (!isLocal) return p;
-          return {
-            ...o,
-            ...(wan ? { wan_ip: wan, wan_ipv4: wan } : {}),
-            ...(wan6 ? { wan_ipv6: wan6 } : {}),
-            ...(hasGeo ? { lat: geoLat, lon: geoLon } : {}),
-            ...(geoCity ? { city: geoCity } : {}),
-            ...(geoCountry ? { country: geoCountry } : {}),
-          };
-        });
+            || (localIp !== "" && String(o.ipv4 ?? "") === localIp)
+            || (localHost !== "" && String(o.hostname ?? "") === localHost);
+          if (isLocal) {
+            if (wan) { o.wan_ip = wan; o.wan_ipv4 = wan; }
+            if (wan6) o.wan_ipv6 = wan6;
+            if (hasGeo) { o.lat = geoLat; o.lon = geoLon; }
+            if (geoCity) o.city = geoCity;
+            if (geoCountry) o.country = geoCountry;
+          }
+          out.push(o);
+        }
+        peers = out;
       }
 
       const relay = await relayHealth(req, env, ctx);
@@ -388,16 +479,20 @@ export default {
       if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
       let username = "", password = "", remember = false, isForm = false;
       const ct = req.headers.get("content-type") ?? "";
+      // 登录在鉴权门之前，必须自己限体（旧实现用 req.json()/formData，实际无上限）
+      const rawLogin = await readCapped(req, MAX_LOGIN_BODY);
+      if (!rawLogin) return json({ ok: false, error: "too large" }, 413);
       try {
+        const text = new TextDecoder().decode(rawLogin);
         if (ct.includes("application/json")) {
-          const b = await req.json() as { username?: unknown; password?: unknown; remember?: unknown };
+          const b = JSON.parse(text) as { username?: unknown; password?: unknown; remember?: unknown };
           username = String(b.username ?? "");
           password = String(b.password ?? "");
           remember = b.remember === true || b.remember === "true" || b.remember === "on";
         } else {
-          const f = await req.formData();
-          username = String(f.get("username") ?? "");
-          password = String(f.get("password") ?? "");
+          const f = new URLSearchParams(text);
+          username = f.get("username") ?? "";
+          password = f.get("password") ?? "";
           remember = f.get("remember") === "on" || f.get("remember") === "true";
           isForm = true;
         }
@@ -410,7 +505,7 @@ export default {
       }
       const maxAge = remember ? 7 * 24 * 3600 : 24 * 3600;
       const exp = Math.floor(Date.now() / 1000) + maxAge;
-      const cookie = `${SESSION_COOKIE}=${exp}.${await sessionSig(env, exp)}; Path=/; HttpOnly; Secure; SameSite=Lax${remember ? `; Max-Age=${maxAge}` : ""}`;
+      const cookie = `${SESSION_COOKIE}=${exp}.${await sessionSig(env, exp, env.DASH_USER)}; Path=/; HttpOnly; Secure; SameSite=Lax${remember ? `; Max-Age=${maxAge}` : ""}`;
       if (isForm) {
         return new Response(null, { status: 302, headers: { location: "/", "set-cookie": cookie } });
       }
@@ -419,9 +514,8 @@ export default {
       });
     }
     if (p === "/api/logout") {
-      if (req.method === "GET") {
-        return new Response(null, { status: 302, headers: { location: "/login", "set-cookie": clearSessionCookie() } });
-      }
+      // 只接受 POST：GET 形式的登出能被任意跨站 <img>/链接触发（登出 CSRF）
+      if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
       return new Response(JSON.stringify({ ok: true }), {
         status: 200, headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": clearSessionCookie() },
       });
