@@ -647,6 +647,16 @@
           located: true, source: '上报坐标'
         };
       }
+      // 出网被代理污染的节点：按主机名钉死（见 NODE_GEO_HINTS 注释）
+      const hint = NODE_GEO_HINTS[String(host).toLowerCase()];
+      if (hint) {
+        return {
+          city: hint.city || '', subtitle: defaultSubtitle,
+          wanIp, wanIpv6, country: peerCountry || 'CN',
+          lat: hint.lat, lon: hint.lon, routeLabel: '', located: true, source: '主机名修正'
+        };
+      }
+
       // 其它节点：用它自己上报时被 IP 反查到的地理（来自 buildGeoIndex 的汇总，不是按名字猜）
       const known = geoIndex.get(host) || geoIndex.get(vip);
       if (known) {
@@ -827,6 +837,14 @@
     // 别人的视角里也能定位到我 —— 数据仍然来自 Worker 的 IP 反查，不按主机名猜。
     let geoIndex = new Map();
 
+    // 少数节点的 IP 反查会被"自己的出网代理"污染：主路由 qwrt 的 HTTPS 全部走本机
+    // sing-box 出去，Cloudflare 看到的源 IP 是海外代理节点，反查出来就成了洛杉矶，
+    // 而它真实 WAN 是家里宽带（183.92.24.x）。这种机器只能按主机名钉死城市。
+    // 优先级：手动标注 > 这里 > Worker 的 IP 反查 > 未定位。
+    const NODE_GEO_HINTS = {
+      'qwrt': { city: '武汉', lat: 30.5928, lon: 114.3055 }
+    }
+
     // Worker 返回的是 IP 库的英文城市名，这里统一转中文显示
     const CITY_ZH = {
       'los angeles': '洛杉矶', 'phoenix': '凤凰城', 'frankfurt am main': '法兰克福', 'frankfurt': '法兰克福',
@@ -843,7 +861,15 @@
       'warsaw': '华沙', 'moscow': '莫斯科', 'toronto': '多伦多', 'vancouver': '温哥华',
       'montreal': '蒙特利尔', 'sao paulo': '圣保罗', 'são paulo': '圣保罗', 'rio de janeiro': '里约热内卢',
       'buenos aires': '布宜诺斯艾利斯', 'sydney': '悉尼', 'melbourne': '墨尔本', 'auckland': '奥克兰',
-      'cape town': '开普敦', 'johannesburg': '约翰内斯堡', 'lagos': '拉各斯', 'cairo': '开罗'
+      'cape town': '开普敦', 'johannesburg': '约翰内斯堡', 'lagos': '拉各斯', 'cairo': '开罗',
+      'wuhan': '武汉', 'chengdu': '成都', 'hangzhou': '杭州', 'nanjing': '南京', 'xian': '西安',
+      'chongqing': '重庆', 'tianjin': '天津', 'suzhou': '苏州', 'qingdao': '青岛', 'changsha': '长沙',
+      'zhengzhou': '郑州', 'hefei': '合肥', 'fuzhou': '福州', 'xiamen': '厦门', 'kunming': '昆明',
+      'dalian': '大连', 'shenyang': '沈阳', 'harbin': '哈尔滨', 'jinan': '济南', 'nanning': '南宁',
+      'guiyang': '贵阳', 'lanzhou': '兰州', 'urumqi': '乌鲁木齐', 'hohhot': '呼和浩特', 'taiyuan': '太原',
+      'shijiazhuang': '石家庄', 'changchun': '长春', 'nanchang': '南昌', 'wenzhou': '温州', 'ningbo': '宁波',
+      'wuxi': '无锡', 'dongguan': '东莞', 'foshan': '佛山', 'zhuhai': '珠海', 'macau': '澳门',
+      'kowloon': '九龙', 'sha tin': '沙田', 'tsuen wan': '荃湾', 'taichung': '台中', 'hsinchu': '新竹'
     };
     function cityZh(name) {
       const k = String(name || '').trim();
