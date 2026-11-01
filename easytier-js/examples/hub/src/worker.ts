@@ -213,7 +213,9 @@ export class StatusObject extends DurableObject<E> {
         }
       }
       for (let i = 0; i < evts.length; i += 64) {
-        await Promise.all(evts.slice(i, i + 64).map((e) => this.ctx.storage.put(`e:${e.at}:${e.ip}`, e)));
+        // 事件键必须含 reporter 和序号：旧键 e:${at}:${ip} 在多 reporter 同毫秒同 IP 时会互相覆盖，
+        // 且 padTs 让时间排序与字典序一致，sweep 才能按时间提前截断。
+        await Promise.all(evts.slice(i, i + 64).map((e, j) => this.ctx.storage.put(`e:${padTs(e.at)}:${e.reporter}:${e.ip}:${i + j}`, e)));
       }
       changed = evts.length > 0;
       // 流量速率：相对上一条快照的增量 / 时间差
@@ -250,31 +252,56 @@ export class StatusObject extends DurableObject<E> {
     await this.ctx.storage.setAlarm(Date.now() + SWEEP_INTERVAL_MS);
   }
 
-  private async sweep(): Promise<void> {
-    const now = Date.now();
-    const cutoff = now - HISTORY_RETENTION_MS;
+  // 按前缀分段清扫：旧实现不带前缀从头扫全表（200×500=10 万键上限），
+  // 按字典序 e:→h:→m:→r:，3 个以上 reporter 时靠后的 h: 和全部 r: 永远轮不到。
+  // 新实现：r: 单独扫（每 reporter 1 键，顺带删 m:）；h: 按 m: 枚举 reporter 逐个扫，
+  // 键按 padTs 升序，遇到第一个未过期就提前截断，不用扫全表；e: 同理。
+  private async sweepPrefixExpired(prefix: string, getTs: (k: string) => number, cutoff: number): Promise<void> {
     let cursor: string | undefined;
     for (let page = 0; page < 200; page++) {
-      const rows = await this.ctx.storage.list({ limit: 500, ...(cursor ? { startAfter: cursor } : {}) });
+      const rows = await this.ctx.storage.list({ prefix, limit: 500, ...(cursor ? { startAfter: cursor } : {}) });
       if (rows.size === 0) break;
       const drop: string[] = [];
-      for (const [k, v] of rows) {
+      let stop = false;
+      for (const k of rows.keys()) {
         cursor = k;
-        if (k.startsWith("r:")) {
-          const at = Number((v as Snap | undefined)?.at ?? 0);
-          if (!at || now - at > STALE_PURGE_MS) drop.push(k);
-        } else if (k.startsWith("h:") || k.startsWith("e:")) {
-          const ts = k.startsWith("e:")
-            ? Number(k.slice(2).split(":")[0])
-            : Number(k.slice(k.lastIndexOf(":") + 1));
-          if (Number.isFinite(ts) && ts > 0 && ts < cutoff) drop.push(k);
-        }
+        const ts = getTs(k);
+        if (Number.isFinite(ts) && ts > 0 && ts < cutoff) drop.push(k);
+        else { stop = true; break; }
       }
       for (let i = 0; i < drop.length; i += 128) {
         await Promise.all(drop.slice(i, i + 128).map((k) => this.ctx.storage.delete(k)));
       }
-      if (rows.size < 500) break;
+      if (stop || rows.size < 500) break;
     }
+  }
+
+  private async sweep(): Promise<void> {
+    const now = Date.now();
+    const cutoff = now - HISTORY_RETENTION_MS;
+    // r: 快照过期（24h 未上报）时连带删 m:，否则 m: 永远残留；snapshot() 读路径同理。
+    const snaps = await this.ctx.storage.list<Snap>({ prefix: "r:" });
+    for (const [k, v] of snaps) {
+      if (!v?.at || now - v.at > STALE_PURGE_MS) {
+        await this.ctx.storage.delete(k);
+        await this.ctx.storage.delete(`m:${k.slice(2)}`);
+      }
+    }
+    // 孤儿 m:：r: 已不在（旧版 sweep/snapshot 删 r: 时没删 m:），直接清掉。
+    const metas = await this.ctx.storage.list({ prefix: "m:" });
+    for (const k of metas.keys()) {
+      const rep = k.slice(2);
+      if (!(await this.ctx.storage.get(`r:${rep}`))) await this.ctx.storage.delete(k);
+    }
+    // h: 按 reporter 分段，时间升序提前截断。
+    for (const k of metas.keys()) {
+      const rep = k.slice(2);
+      if (await this.ctx.storage.get(`r:${rep}`)) {
+        await this.sweepPrefixExpired(`h:${rep}:`, (key) => Number(key.slice(key.lastIndexOf(":") + 1)), cutoff);
+      }
+    }
+    // e: 键首段是 padTs（旧键是原始毫秒，同为 13 位数字，解析方式兼容），升序提前截断。
+    await this.sweepPrefixExpired("e:", (key) => Number(key.slice(2).split(":")[0]), cutoff);
   }
 
   async snapshot(): Promise<Snap[]> {
@@ -282,7 +309,10 @@ export class StatusObject extends DurableObject<E> {
     const all = await this.ctx.storage.list<Snap>({ prefix: "r:" });
     const out: Snap[] = [];
     for (const [k, v] of all) {
-      if (now - v.at > STALE_PURGE_MS) await this.ctx.storage.delete(k);
+      if (now - v.at > STALE_PURGE_MS) {
+        await this.ctx.storage.delete(k);
+        await this.ctx.storage.delete(`m:${k.slice(2)}`);
+      }
       // 输出时再过滤一次：即使是修复前存入的旧快照，也不再外泄敏感字段
       else out.push(sanitizeSnap(v));
     }
@@ -295,6 +325,62 @@ export class StatusObject extends DurableObject<E> {
     });
     await this.purgeOld(`h:${reporter}:`);
     return [...map.values()].reverse(); // 调用方按时间正序画曲线
+  }
+
+  // 服务端分桶聚合：前端画 24h sparkline/状态条不需要拉原始快照。
+  // 每桶每节点只返回平均延迟、最大丢包、在线采样数/桶内快照数；不返回原始 peer 字段。
+  // 上报源整桶无快照时该桶不存在，前端画“无数据”灰色，绝不算节点离线。
+  async historyBuckets(reporter: string, windowMs: number, bucketMs: number): Promise<{ t: number; nodes: Record<string, { lat: number | null; loss: number | null; samples: number; total: number }> }[]> {
+    const now = Date.now();
+    const cutoff = now - windowMs;
+    const nBuckets = Math.ceil(windowMs / bucketMs);
+    const totals = new Array<number>(nBuckets).fill(0);
+    // buckets[i] = Map<nodeKey, {latSum, latCount, maxLoss, samples}>
+    const buckets: Map<string, { latSum: number; latCount: number; maxLoss: number | null; samples: number }>[] =
+      Array.from({ length: nBuckets }, () => new Map());
+    // 注意：DO storage.list 返回的是 Map，不带 cursor 字段；分页必须用 startAfter=上一页最后一个键。
+    // 之前用 map.cursor 分页会永远停在第一页（最旧的 500 条），24h 桶全空——已修正。
+    // 另用 start 直接跳到 cutoff 键，避免从 30 天前逐页扫到今天。
+    let startAfter: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const map = await this.ctx.storage.list<HistEntry>({
+        prefix: `h:${reporter}:`, limit: 500,
+        ...(startAfter ? { startAfter } : { start: `h:${reporter}:${padTs(cutoff)}` }),
+      });
+      for (const entry of map.values()) {
+        if (entry.at < cutoff) continue;
+        const idx = Math.min(nBuckets - 1, Math.floor((entry.at - cutoff) / bucketMs));
+        totals[idx] = (totals[idx] ?? 0) + 1;
+        const bucket = buckets[idx];
+        if (!bucket) continue;
+        for (const peer of entry.peers || []) {
+          // 注意：历史快照是 peerStats() 的紧凑 PeerStat，只有 id/hostname/lat/rx/tx/rx_rate/tx_rate，
+          // 没有 loss_rate、ipv4、lat_ms 字段。丢包趋势在历史里不存在，前端不画丢包 sparkline。
+          const key = String(peer.id || peer.hostname || "").trim();
+          if (!key) continue;
+          let agg = bucket.get(key);
+          if (!agg) { agg = { latSum: 0, latCount: 0, maxLoss: null, samples: 0 }; bucket.set(key, agg); }
+          agg.samples++;
+          const lat = peer.lat;
+          if (typeof lat === "number" && Number.isFinite(lat) && lat >= 0 && lat < 999999) { agg.latSum += lat; agg.latCount++; }
+        }
+      }
+      if (map.size === 0) break;
+      for (const k of map.keys()) startAfter = k;
+      if (map.size < 500) break;
+    }
+    return buckets.map((m, i) => {
+      const nodes: Record<string, { lat: number | null; loss: number | null; samples: number; total: number }> = {};
+      for (const [key, agg] of m) {
+        nodes[key] = {
+          lat: agg.latCount ? Math.round((agg.latSum / agg.latCount) * 10) / 10 : null,
+          loss: agg.maxLoss,
+          samples: agg.samples,
+          total: totals[i] ?? 0,
+        };
+      }
+      return { t: cutoff + i * bucketMs, nodes };
+    });
   }
 
   async events(limit: number): Promise<Evt[]> {
@@ -351,7 +437,15 @@ async function rateBump(key: string, ttlSec: number): Promise<number> {
 async function rateClear(key: string): Promise<void> {
   await caches.default.delete(new URL(RATE_ORIGIN + key));
 }
-const loginKey = (ip: string) => `login:${ip}`;
+// 限流按 IP 分桶：IPv6 按 /64 聚合，避免同一 /64 内换地址就绕过锁定；
+// 注意 Cache API 的 read→+1→put 不是原子的，并发仍可能多放行几次，
+// 对只有单管理员的私有看板可接受，严格原子限流需改用 DO 或 Rate Limiting binding。
+const rateIp = (ip: string) => {
+  if (!ip.includes(":")) return ip;
+  const parts = ip.split(":");
+  return parts.length >= 4 ? parts.slice(0, 4).join(":") : ip;
+};
+const loginKey = (ip: string) => `login:${rateIp(ip)}`;
 const relayKey = (ip: string) => `relay:${ip}:${Math.floor(Date.now() / 60_000)}`;
 
 // NODE_TOKENS → Map<token, node>，顺便把非法条目挡掉（node 名必须符合 reporter 正则）
@@ -427,7 +521,11 @@ async function sessionOk(req: Request, env: E): Promise<boolean> {
   if (!env.DASH_PASS || !env.DASH_USER) return false;
   const m = (req.headers.get("cookie") ?? "").match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
   if (!m) return false;
-  const [expStr, sig] = decodeURIComponent(m[1]).split(".");
+  // 畸形 Cookie（如非法 %）会让 decodeURIComponent 抛错，之前会 500 且连 /login 页都打不开；
+  // 这里只判会话无效，让用户仍能打开登录页重新登录。
+  let decoded: string;
+  try { decoded = decodeURIComponent(m[1]); } catch { return false; }
+  const [expStr, sig] = decoded.split(".");
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp * 1000 < Date.now() || !sig) return false;
   return safeEq(sig, await sessionSig(env, exp, env.DASH_USER));
@@ -437,9 +535,17 @@ async function dashAuthOk(req: Request, env: E): Promise<boolean> {
   if (!env.DASH_USER || !env.DASH_PASS) return false;
   const h = req.headers.get("authorization") ?? "";
   if (h.startsWith("Basic ")) {
-    try {
-      if (safeEq(atob(h.slice(6)), `${env.DASH_USER}:${env.DASH_PASS}`)) return true;
-    } catch { /* fall through to session check */ }
+    // Basic 也走登录限流：锁定时不再试口令，只接受已有会话，避免 Basic 成为爆破旁路。
+    const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
+    if ((await rateRead(loginKey(ip))) < LOGIN_MAX_FAILS) {
+      try {
+        if (safeEq(atob(h.slice(6)), `${env.DASH_USER}:${env.DASH_PASS}`)) {
+          await rateClear(loginKey(ip));
+          return true;
+        }
+        await rateBump(loginKey(ip), LOGIN_LOCK_MS / 1000);
+      } catch { /* fall through to session check */ }
+    }
   }
   return sessionOk(req, env);
 }
@@ -456,9 +562,11 @@ export default {
     // 缺 secret 时优先 503：宁可整站不可用，也不能回落到"匿名可读"。
     // relay 只依赖 EASYTIER_NETWORK_SECRET，单独放行。
     if (!p.startsWith(RELAY)) {
+      // 上报鉴权有两种合法模式：共享 REPORT_TOKEN，或节点级 NODE_TOKENS；
+      // 旧实现只认 REPORT_TOKEN，只配 NODE_TOKENS 的部署会被整站 503。
       const missing = !env.DASH_USER || !env.DASH_PASS
         ? "DASH_USER/DASH_PASS"
-        : (!env.REPORT_TOKEN ? "REPORT_TOKEN" : "");
+        : (!env.REPORT_TOKEN && !parseNodeTokens(env.NODE_TOKENS) ? "REPORT_TOKEN or NODE_TOKENS" : "");
       if (missing) return json({ ok: false, error: `hub not configured: ${missing}` }, 503);
     }
 
@@ -483,6 +591,11 @@ export default {
       const auth = req.headers.get("authorization") ?? "";
       const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
       const nodeTokens = parseNodeTokens(env.NODE_TOKENS);
+      // NODE_TOKENS 已设置但解析不出任何有效条目时不回退共享 token，
+      // 否则写错 JSON 会静默降级，STRICT 也失效。
+      if (env.NODE_TOKENS && !nodeTokens) {
+        return json({ ok: false, error: "node tokens misconfigured" }, 503);
+      }
       let boundReporter = "";
       if (nodeTokens) {
         // 每个节点一个 token：token 决定 reporter，body.reporter 被忽略，
@@ -493,13 +606,15 @@ export default {
             break;
           }
         }
-        if (!boundReporter) return new Response("unauthorized", { status: 401 });
         if (!boundReporter) {
           // 过渡期：NODE_TOKENS 已配好但节点还没换完时，允许共享 token 继续上报
           // （reporter 仍由 body 决定）。全部换完后把 NODE_TOKENS_STRICT 置 1 收口。
+          // 注意：之前这里先写了一行 `if (!boundReporter) return 401`，导致下面这段
+          // 过渡逻辑永远执行不到，灰度期旧节点会直接断报——已删掉那行。
           const legacyOk = env.NODE_TOKENS_STRICT !== "1"
             && !!env.REPORT_TOKEN && safeEq(bearer, env.REPORT_TOKEN);
           if (!legacyOk) return new Response("unauthorized", { status: 401 });
+          // 过渡期 reporter 由 body 决定，冒用检查在 body 解析后做（见下方）。
         }
       } else if (!env.REPORT_TOKEN || !safeEq(bearer, env.REPORT_TOKEN)) {
         return new Response("unauthorized", { status: 401 });
@@ -516,6 +631,11 @@ export default {
       };
       const reporter = boundReporter || String(body.reporter ?? "");
       if (!/^[\w.-]{1,64}$/.test(reporter)) return new Response("bad reporter", { status: 400 });
+      // 过渡期用共享 token 上报时，reporter 不能冒用 NODE_TOKENS 里已登记的节点名，
+      // 否则旧节点可以覆盖已换 token 节点的快照/历史。
+      if (!boundReporter && nodeTokens && [...nodeTokens.values()].includes(reporter)) {
+        return new Response("unauthorized", { status: 401 });
+      }
 
       // 上报节点的 WAN：优先取节点自身 STUN 结果里的公网 IPv4，
       // 其次取 Cloudflare 看到的来源 IP；坐标取 Cloudflare 对该来源 IP 的
@@ -622,7 +742,9 @@ export default {
         }
       } catch { return json({ ok: false, error: "bad request" }, 400); }
       if (!env.DASH_USER || !env.DASH_PASS) {
-        return isForm ? Response.redirect(new URL("/", req.url), 302) : json({ ok: true });
+        // 之前这里直接放行（isForm 跳 /、JSON 返回 ok），虽然 503 门已挡住，
+        // 但万一门被绕过就是匿名登录；缺配置一律 503。
+        return json({ ok: false, error: "hub not configured" }, 503);
       }
       if (!safeEq(username, env.DASH_USER) || !safeEq(password, env.DASH_PASS)) {
         await rateBump(loginKey(loginIp), LOGIN_LOCK_MS / 1000);
@@ -661,6 +783,24 @@ export default {
     if (p === "/api/history") {
       const reporter = url.searchParams.get("reporter") ?? "";
       if (!/^[\w.-]{1,64}$/.test(reporter)) return new Response("bad reporter", { status: 400 });
+      const windowParam = url.searchParams.get("window");
+      const bucketParam = url.searchParams.get("bucket");
+      if (windowParam && bucketParam) {
+        const parseDur = (s: string): number | null => {
+          const m = /^(\d+)(m|h|d)$/.exec(s);
+          if (!m) return null;
+          const n = Number(m[1]);
+          const unit = m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000;
+          return n * unit;
+        };
+        const windowMs = parseDur(windowParam);
+        const bucketMs = parseDur(bucketParam);
+        if (!windowMs || !bucketMs || bucketMs < 60_000 || windowMs / bucketMs > 200) {
+          return new Response("bad window/bucket", { status: 400 });
+        }
+        const buckets = await env.STATUS.getByName("main").historyBuckets(reporter, windowMs, bucketMs);
+        return json({ now: Date.now(), reporter, window: windowParam, bucket: bucketParam, buckets });
+      }
       const entries = await env.STATUS.getByName("main").history(
         reporter, clampLimit(url.searchParams.get("limit"), 500, 2000),
       );

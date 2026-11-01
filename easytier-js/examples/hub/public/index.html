@@ -4,101 +4,253 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EasyTier Hub</title>
-  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"PingFang SC"', '"Microsoft YaHei"', 'sans-serif'],
-            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
-          }
-        }
-      }
-    };
+    // 主题在首帧前设置，避免深色用户每次刷新先闪白屏（原 Tailwind darkMode:'class' 的做法，原生 CSS 沿用）。
+    try {
+      // 深色是默认（:root 即深色），只有用户明确存过 light 才加 light 类；旧存的 dark 视为默认，不处理。
+      if (localStorage.getItem('et_hub_theme') === 'light') document.documentElement.classList.add('light');
+    } catch (e) {}
   </script>
   <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-      -webkit-font-smoothing: antialiased;
-    }
-    .font-mono-num {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-variant-numeric: tabular-nums;
-    }
-    @keyframes pulse-ring {
-      0% { transform: scale(0.95); opacity: 0.8; }
-      70% { transform: scale(1.75); opacity: 0; }
-      100% { transform: scale(1.75); opacity: 0; }
-    }
-    .status-dot-pulse::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: 9999px;
-      background-color: inherit;
-      animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-    /* Theme-adaptive SVG Map styles (synced with webpage Light/Dark mode) */
+    /* ---------- reset（替代 Tailwind Preflight 的最小集） ---------- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; border: 0 solid var(--line); }
+    h1, h2, h3 { font-size: inherit; font-weight: inherit; }
+    button, select, input { font: inherit; color: inherit; background: none; }
+    button { cursor: pointer; }
+    svg { display: block; flex-shrink: 0; }
+    [hidden] { display: none !important; }
+    /* ---------- tokens：组件只引用变量，dark 只重定义变量 ---------- */
     :root {
-      --map-bg-start: #f8fafc;
-      --map-bg-end: #eff6ff;
-      --map-dot-land: #cbd5e1;
-      --map-country-fill: rgba(148, 163, 184, 0.06);
-      --map-country-line: rgba(148, 163, 184, 0.20);
-      --map-node-title: #0f172a;
-      --map-pill-bg: rgba(255, 255, 255, 0.94);
-      --map-label-halo: rgba(255, 255, 255, 0.92);
+      --bg: #0B0E13; --surface: #11151C; --surface-2: #171C24; --surface-3: #1E242E;
+      --line: rgb(255 255 255 / .06); --line-strong: rgb(255 255 255 / .10);
+      --text: #E6E8EB; --muted: #9AA3AF; --muted-2: #6B7480;
+      --ok: #3DBE8B; --warn: #E5A93C; --bad: #EF5B5B; --accent: #6E8BFF; --nodata: #252B35;
+      --ok-soft: color-mix(in srgb, var(--ok) 14%, transparent);
+      --warn-soft: color-mix(in srgb, var(--warn) 14%, transparent);
+      --bad-soft: color-mix(in srgb, var(--bad) 14%, transparent);
+      --r: 12px; --r-lg: 12px; color-scheme: dark;
+      --map-bg-start: #0d1424; --map-bg-end: #080c14; --map-dot-land: #29384e;
+      --map-country-fill: rgb(148 163 184 / .05); --map-country-line: rgb(148 163 184 / .16);
+      --map-node-title: #f8fafc; --map-pill-bg: rgb(11 16 28 / .92); --map-label-halo: rgb(8 12 20 / .92);
     }
-    html.dark {
-      --map-bg-start: #0d1424;
-      --map-bg-end: #080c14;
-      --map-dot-land: #29384e;
-      --map-country-fill: rgba(148, 163, 184, 0.05);
-      --map-country-line: rgba(148, 163, 184, 0.16);
-      --map-node-title: #f8fafc;
-      --map-pill-bg: rgba(11, 16, 28, 0.92);
-      --map-label-halo: rgba(8, 12, 20, 0.92);
+    html.light {
+      --bg: #F5F6F8; --surface: #FFF; --surface-2: #F0F2F5; --surface-3: #E7EAEE;
+      --line: rgb(15 23 42 / .07); --line-strong: rgb(15 23 42 / .12);
+      --text: #14181F; --muted: #5B6472; --muted-2: #8A93A0;
+      --ok: #1F9D6E; --warn: #C27C0E; --bad: #D64545; --accent: #4F6BED; --nodata: #E3E6EA;
+      color-scheme: light;
+      --map-bg-start: #f8fafc; --map-bg-end: #eff6ff; --map-dot-land: #cbd5e1;
+      --map-country-fill: rgb(148 163 184 / .07); --map-country-line: rgb(148 163 184 / .2);
+      --map-node-title: #0f172a; --map-pill-bg: rgb(255 255 255 / .94); --map-label-halo: rgb(255 255 255 / .92);
     }
-    @keyframes dash-flow {
-      to { stroke-dashoffset: -48; }
-    }
-    .map-arc-flow {
-      stroke-dasharray: 4 20;
-      animation: dash-flow 1.8s linear infinite;
-    }
-    @keyframes node-breathe {
-      0%, 100% { r: 12px; opacity: 0.22; }
-      50% { r: 16px; opacity: 0.38; }
-    }
-    .map-node-halo {
-      animation: node-breathe 2.6s ease-in-out infinite;
-    }
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+    .num { font-variant-numeric: tabular-nums; }
+    .spark { display: block; }
+    .status-bar { display: flex; gap: 2px; height: 6px; }
+    .status-bar > div { border-radius: 2px; min-width: 2px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .muted { color: var(--muted); }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* ---------- header ---------- */
+    .topbar { position: sticky; top: 0; z-index: 30; background: var(--bg); }
+    .topbar.scrolled { border-bottom: 1px solid var(--line); }
+    .topbar-inner { max-width: 80rem; margin: 0 auto; padding: 0 16px; height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+    .top-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); }
+    .pill[data-state="warn"] { color: var(--warn); }
+    .pill[data-state="bad"] { color: var(--bad); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-2); flex-shrink: 0; }
+    .dot[data-state="ok"] { background: var(--ok); }
+    .dot[data-state="warn"] { background: var(--warn); }
+    .dot[data-state="bad"] { background: var(--bad); }
+    .dot[data-state="bad"].pulse { position: relative; }
+    .dot[data-state="bad"].pulse::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: pulse-ring 2s cubic-bezier(.4,0,.6,1) infinite; }
+    .icon-btn { padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); display: inline-flex; }
+    .icon-btn:hover { color: var(--text); background: var(--surface-2); }
+    .icon-btn:focus-visible, .btn:focus-visible, .chip:focus-visible, .input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    select.pill { appearance: none; padding-right: 28px; cursor: pointer; }
+    .select-wrap { position: relative; }
+    .select-wrap svg { position: absolute; right: 10px; top: 50%; translate: 0 -50%; pointer-events: none; color: var(--muted-2); }
+    /* ---------- layout ---------- */
+    main { position: relative; z-index: 10; flex: 1; max-width: 80rem; width: 100%; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 24px; }
+    .panel { background: var(--surface); border-radius: var(--r-lg); overflow: hidden; }
+    .panel-head { padding: 14px 16px 2px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    .panel-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+    /* ---------- health bar ---------- */
+    button.health { border: 0; font: inherit; color: inherit; }
+    .health { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px; border-radius: var(--r); background: var(--surface); font-size: 13px; }
+    .health-main { font-size: 18px; }
+    .health[data-state="bad"] { border-color: rgb(225 29 72 / .4); }
+    .health[data-state="warn"] { border-color: rgb(217 119 6 / .4); }
+    .health-main { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .health-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .health-chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface-2); cursor: pointer; }
+    .health-chip[data-state="bad"] { color: var(--bad); border-color: rgb(225 29 72 / .4); }
+    .health-chip[data-state="warn"] { color: var(--warn); border-color: rgb(217 119 6 / .4); }
+    .health-time { margin-left: auto; font-size: 12px; color: var(--muted); }
+    .health-time[data-state="warn"] { color: var(--warn); }
+    /* ---------- KPI ---------- */
+    .kpis { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    .kpi { background: var(--surface); border-radius: var(--r); padding: 20px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+    .kpi-spark { margin: 4px -20px -20px; height: 28px; color: var(--muted-2); }
+    .kpi-spark svg { width: 100%; height: 100%; display: block; }
+    .kpi-label { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; font-weight: 500; }
+    .kpi-value { font-size: 36px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+    .kpi-value .unit { font-size: 11px; color: var(--muted); margin-left: 2px; font-weight: 400; }
+    .kpi-value[data-state="warn"] { color: var(--warn); }
+    .kpi-value[data-state="bad"] { color: var(--bad); }
+    .kpi-sub { font-size: 13px; color: var(--muted); }
+    .kpi-foot { padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+    .bar { width: 100%; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; display: flex; }
+    .bar > div { height: 100%; transition: width .3s; }
+    .bar-p2p { background: var(--ok); } .bar-relay { background: var(--warn); } .bar-local { background: var(--accent); }
+    .skeleton { display: inline-block; width: 2.5ch; height: 1em; border-radius: 4px; background: var(--surface-2); vertical-align: baseline; }
+    /* ---------- buttons / chips / inputs ---------- */
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+    @media (hover: hover) { .btn:hover { background: var(--surface-2); } }
+    .btn-danger { color: var(--bad); }
+    .chip { padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--muted); background: transparent; border: 1px solid transparent; }
+    .chip[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+    .chip[data-state="bad"][aria-pressed="false"] { color: var(--bad); }
+    .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); font-size: 12px; }
+    .seg button { padding: 4px 10px; border-radius: 6px; font-weight: 500; color: var(--muted); }
+    .seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+    .input { width: 100%; padding: 6px 12px; font-size: 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text); }
+    .input::placeholder { color: var(--muted-2); }
+    .search-wrap { position: relative; flex: 1; }
+    .search-wrap svg { position: absolute; left: 12px; top: 50%; translate: 0 -50%; pointer-events: none; color: var(--muted-2); }
+    .search-wrap .input { padding-left: 36px; padding-right: 40px; }
+    .search-wrap kbd { position: absolute; right: 10px; top: 50%; translate: 0 -50%; padding: 2px 6px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--muted-2); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+    /* ---------- table ---------- */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; text-align: left; border-collapse: collapse; }
+    thead tr { border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: 12px; font-weight: 600; color: var(--muted); }
+    th, td { padding: 12px 16px; white-space: nowrap; }
+    tbody td { height: 44px; }
+    thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+    th:first-child, td:first-child { padding-left: 24px; }
+    th:last-child, td:last-child { padding-right: 24px; }
+    th[data-sort] { cursor: pointer; user-select: none; }
+    th[data-sort]:hover { color: var(--text); }
+    tbody tr { border-bottom: 1px solid var(--line); cursor: pointer; }
+    tbody tr:last-child { border-bottom: 0; }
+    @media (hover: hover) { tbody tr:hover { background: var(--surface-2); } }
+    tbody td { font-size: 14px; }
+    .peer-row[data-state="bad"] { box-shadow: inset 3px 0 0 var(--bad); }
+    .peer-row[data-state="warn"] { box-shadow: inset 3px 0 0 var(--warn); }
+    .num-col { text-align: right; font-variant-numeric: tabular-nums; }
+    .num-col[data-state="warn"] { color: var(--warn); }
+    .num-col[data-state="bad"] { color: var(--bad); font-weight: 600; }
+    .node-name { font-size: 14px; font-weight: 600; }
+    .node-ip { font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .link-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--line); }
+    .link-chip[data-state="warn"] { color: var(--warn); border-color: rgb(217 119 6 / .4); }
+    .copy-ip-btn { opacity: 0; padding: 4px; border-radius: 6px; color: var(--muted-2); }
+    tr:hover .copy-ip-btn, .copy-ip-btn:focus { opacity: 1; }
+    /* ---------- cards ---------- */
+    .cards { padding: 16px; display: grid; grid-template-columns: 1fr; gap: 12px; }
+    .peer-card { position: relative; overflow: hidden; border-radius: var(--r); background: var(--surface); padding: 14px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+    .peer-card[data-state="bad"] { box-shadow: inset 3px 0 0 var(--bad); background: var(--bad-soft); }
+    .peer-card[data-state="warn"] { box-shadow: inset 3px 0 0 var(--warn); }
+    .peer-card[data-state="warn"] { border-top: 3px solid var(--warn); }
+    .peer-card .row-id { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .peer-card .row-metrics { display: flex; align-items: baseline; gap: 12px; }
+    .peer-card .metric { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .peer-card .metric .unit { font-size: 12px; color: var(--muted); margin-left: 2px; font-weight: 400; }
+    .peer-card .metric[data-state="warn"] { color: var(--warn); }
+    .peer-card .metric[data-state="bad"] { color: var(--bad); }
+    .peer-card .row-meta { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    .peer-card .provider-mark { height: 16px; }
+    .peer-card .provider-mark svg { height: 100%; width: auto; }
+    .empty { padding: 32px 16px; text-align: center; }
+    .empty .title { font-size: 14px; font-weight: 500; margin-top: 12px; }
+    .empty .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    /* ---------- map ---------- */
+    .map-wrap { position: relative; width: 100%; overflow: hidden; height: clamp(320px, 36vw, 480px); }
+    .map-wrap.collapsed { display: none; }
+    #geoMapCanvas { width: 100%; height: 100%; display: block; cursor: grab; background: radial-gradient(circle at 50% 45%, var(--map-bg-start), var(--map-bg-end)); }
+    #geoMapCanvas:active { cursor: grabbing; }
+    .map-legend { position: absolute; top: 12px; left: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; background: rgb(14 20 34 / .95); border: 1px solid var(--line); border-radius: 12px; padding: 8px 14px; font-size: 12px; color: var(--muted); pointer-events: none; }
+    html.light .map-legend { background: rgb(255 255 255 / .95); }
+    .map-zoom { position: absolute; bottom: 14px; right: 16px; display: flex; align-items: center; gap: 4px; background: rgb(14 20 34 / .95); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+    html.light .map-zoom { background: rgb(255 255 255 / .95); }
+    .map-zoom button { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+    .map-zoom button:hover { color: var(--text); background: var(--surface-2); }
+    .map-tooltip { pointer-events: none; position: absolute; z-index: 20; border-radius: 12px; background: rgb(13 19 34 / .95); border: 1px solid var(--line); padding: 10px 14px; font-size: 12px; min-width: 210px; }
+    html.light .map-tooltip { background: rgb(255 255 255 / .95); }
+    .unlocated { border-top: 1px solid var(--line); padding: 12px 16px; font-size: 12px; color: var(--muted); }
+    /* ---------- events ---------- */
+    .event-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .event-row:last-child { border-bottom: 0; }
+    .event-row .ev-time { font-family: ui-monospace, monospace; color: var(--muted-2); }
+    .event-row .ev-unrecovered { color: var(--bad); font-weight: 600; }
+    /* ---------- modal / toast / banner / footer ---------- */
+    .banner { border: 1px solid rgb(225 29 72 / .3); background: rgb(225 29 72 / .08); border-radius: var(--r); padding: 10px 16px; font-size: 12px; color: var(--bad); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+    .modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(2 6 23 / .55); }
+    .modal-panel { width: 100%; max-width: 32rem; max-height: 88dvh; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+    .modal-panel.wide { max-width: 40rem; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .modal-head h3 { font-size: 15px; font-weight: 600; }
+    .modal-body { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; font-size: 13px; }
+    .kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .kv { padding: 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); }
+    .kv .k { font-size: 12px; color: var(--muted-2); }
+    .kv .v { font-family: ui-monospace, monospace; font-weight: 500; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 12px; max-height: 14rem; overflow: auto; }
+    .toast { position: fixed; bottom: 24px; left: 50%; translate: -50% 0; z-index: 60; background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-size: 12px; }
+    footer { border-top: 1px solid var(--line); padding: 16px; font-size: 12px; color: var(--muted); }
+    footer .inner { max-width: 80rem; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+    /* ---------- map animations (only abnormal links animate; see renderSvgGeoMap) ---------- */
+    @keyframes pulse-ring { 0% { transform: scale(.95); opacity: .8; } 70% { transform: scale(1.75); opacity: 0; } 100% { transform: scale(1.75); opacity: 0; } }
+    @keyframes dash-flow { to { stroke-dashoffset: -48; } }
+    .map-arc-flow { stroke-dasharray: 4 20; animation: dash-flow 1.8s linear infinite; }
+    @keyframes node-breathe { 0%, 100% { r: 12px; opacity: .22; } 50% { r: 16px; opacity: .38; } }
+    .map-node-halo { animation: node-breathe 2.6s ease-in-out infinite; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.3); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(156, 163, 175, 0.5); }
+    ::-webkit-scrollbar-thumb { background: rgb(156 163 175 / .3); border-radius: 3px; }
+    html { scrollbar-width: thin; }
+    #tableViewWrap { display: none; }
+    #cardsViewWrap { display: grid; }
+    @media (min-width: 768px) {
+      #tableViewWrap { display: block; }
+      #cardsViewWrap { display: none; }
+    }
+    @media (min-width: 640px) {
+      .topbar-inner, main { padding-left: 24px; padding-right: 24px; }
+      .kpis { grid-template-columns: repeat(2, 1fr); }
+      .cards { grid-template-columns: repeat(2, 1fr); padding: 24px; }
+      .panel-head { padding-left: 24px; padding-right: 24px; }
+    }
+    @media (min-width: 1024px) {
+      .topbar-inner, main { padding-left: 32px; padding-right: 32px; }
+      .kpis { grid-template-columns: repeat(4, 1fr); gap: 16px; }
+      .cards { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 639px) {
+      .map-wrap { height: 240px; }
+      .kpi { padding: 12px; }
+      .kpi-value { font-size: 24px; }
+      .kpi-foot { display: none; }
+      .kpi-sub { display: none; }
+    }
     @media (prefers-reduced-motion: reduce) {
-      .map-arc-flow, .status-dot-pulse, .map-node-halo { animation: none !important; }
-      *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+      .map-arc-flow, .map-node-halo, .dot.pulse::before { animation: none !important; }
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
       html { scroll-behavior: auto !important; }
     }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-900 dark:bg-[#090b10] dark:text-slate-100 min-h-screen flex flex-col transition-colors duration-200 selection:bg-indigo-500/20 selection:text-indigo-500">
-
-  <!-- Top Ambient Glow -->
-  <div class="pointer-events-none fixed inset-x-0 top-0 h-64 bg-gradient-to-b from-indigo-500/5 via-sky-500/5 to-transparent dark:from-indigo-500/10 dark:via-cyan-500/5 dark:to-transparent z-0"></div>
+<body>
 
   <!-- Header Navigation -->
-  <header class="sticky top-0 z-30 border-b border-slate-200/80 dark:border-slate-800/80 bg-white/85 dark:bg-[#0d1017]/85 backdrop-blur-md">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
-      <!-- Brand -->
-      <div class="flex items-center gap-3 min-w-0">
-        <div class="w-9 h-9 shrink-0" title="EasyTier">
-          <svg viewBox="0 0 128 128" class="w-9 h-9" fill="none" aria-label="EasyTier">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="shrink-0" title="EasyTier">
+          <svg viewBox="0 0 128 128" width="36" height="36" fill="none" aria-label="EasyTier">
             <circle cx="64" cy="64" r="46" stroke="#5b9bff" stroke-width="7" />
             <ellipse cx="64" cy="64" rx="28" ry="15" stroke="#5b9bff" stroke-width="5" />
             <circle cx="64" cy="64" r="9" fill="#5b9bff" />
@@ -108,427 +260,223 @@
             <path d="M64 64 L104 100" stroke="#5b9bff" stroke-width="5" stroke-linecap="round" />
           </svg>
         </div>
-        <div class="truncate">
-          <h1 class="text-base font-extrabold tracking-tight truncate" style="background:linear-gradient(90deg,#34d399,#a3e635 45%,#facc15);-webkit-background-clip:text;background-clip:text;color:transparent;">EasyTier Hub</h1>
-        </div>
+        <h1 class="truncate">EasyTier Hub</h1>
       </div>
-
-      <!-- Right Controls -->
-      <div class="flex items-center gap-2 sm:gap-2.5 shrink-0">
-        <!-- Live status badge (read-only: no demo mode any more) -->
-        <div class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-slate-100 text-slate-700 border-slate-200/80 dark:bg-slate-800/70 dark:text-slate-300 dark:border-slate-700/70" title="数据来源：同域 /api/peers 实时接口">
-          <span id="modeDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+      <div class="top-actions">
+        <button id="modePill" type="button" class="pill" title="刷新">
+          <span id="modeDot" class="dot"></span>
           <span id="modeLabel">等待实时数据</span>
-        </div>
-
-        <!-- Reporter Selector -->
-        <div class="relative hidden md:block">
-          <select id="reporterSelect" aria-label="选择上报源节点" class="appearance-none bg-slate-100 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-lg pl-3 pr-7 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer">
+        </button>
+        <div class="select-wrap">
+          <select id="reporterSelect" class="pill" aria-label="选择上报源节点">
             <option value="__latest__">最新上报节点</option>
           </select>
-          <svg class="w-3.5 h-3.5 text-slate-400 pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
         </div>
-
-        <!-- Refresh Button -->
-        <button id="btnRefresh" type="button" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs" title="立即刷新节点状态">
-          <svg id="refreshIcon" class="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 transition-transform duration-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          <span class="hidden sm:inline" id="countdownText">10s</span>
+        <button id="btnLogout" type="button" class="icon-btn" aria-label="退出登录" title="退出">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
         </button>
-
-        <!-- Logout -->
-        <button id="btnLogout" type="button" class="p-2 rounded-lg border border-slate-200/80 dark:border-slate-700/70 bg-white dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" aria-label="退出登录" title="退出登录">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
-        </button>
-
-        <!-- Theme Toggle -->
-        <button id="btnTheme" type="button" class="p-2 rounded-lg border border-slate-200/80 dark:border-slate-700/70 bg-white dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" aria-label="切换深浅色主题" title="切换深色/浅色模式（地图同步切换）">
-          <svg id="iconSun" class="w-4 h-4 hidden dark:block text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-          </svg>
-          <svg id="iconMoon" class="w-4 h-4 block dark:hidden text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-          </svg>
+        <button id="btnTheme" type="button" class="icon-btn" aria-label="切换主题" title="切换主题">
+          <svg id="iconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" hidden><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+          <svg id="iconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
         </button>
       </div>
     </div>
   </header>
 
   <!-- Main Content -->
-  <main class="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-
-    <!-- Demo Fallback Notice Banner -->
-    <div id="errorBanner" class="hidden rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-800 dark:text-rose-300 flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center gap-2">
-        <span id="errorBannerText">实时接口连接失败，已保留上一份真实数据，不会用演示数据代替。</span>
-      </div>
-      <div class="flex items-center gap-2">
-        <button id="btnRetryLive" type="button" class="px-2.5 py-1 rounded-md font-medium bg-rose-500/20 hover:bg-rose-500/30 text-rose-900 dark:text-rose-200 transition-colors">
-          重新拉取 /api/peers
-        </button>
-      </div>
+  <main>
+    <div id="errorBanner" class="banner" hidden>
+      <span id="errorBannerText">连接失败，显示旧数据。</span>
+      <button id="btnRetryLive" type="button" class="btn btn-danger">重试</button>
     </div>
 
-    <!-- Top KPI Cards Grid -->
-    <section aria-label="核心状态指标" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      <!-- Card 1: Relay Status -->
-      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Relay 状态</span>
-          <span class="p-2 rounded-lg bg-emerald-500/10 text-emerald-500">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-            </svg>
-          </span>
-        </div>
-        <div class="mt-3 flex items-baseline justify-between gap-2">
-          <div class="flex items-center gap-2.5">
-            <span id="relayDot" class="relative w-2.5 h-2.5 rounded-full bg-emerald-500 status-dot-pulse"></span>
-            <b id="relay" class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">-</b>
-          </div>
-          <span id="conn" class="text-xs font-mono-num px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">—</span>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60 text-[11px] text-slate-500 dark:text-slate-400">
-          <span id="relayEndpoint" class="font-mono">wss://et.yi.uy/relay</span>
-        </div>
-      </div>
+    <section id="healthBar" class="health" data-state="ok" aria-label="健康汇总">
+      <span class="health-main"><span class="dot" id="healthDot" data-state="ok"></span><span id="healthText">等待实时数据</span></span>
+      <span class="health-chips" id="healthChips"></span>
+      <span class="health-time" id="healthTime">—</span>
+      <div id="globalStatusBar" class="status-bar" style="width:100%" hidden></div>
+      <div id="globalAvail" style="width:100%;font-size:12px;color:var(--muted)" hidden></div>
+    </section>
+    <button id="eventsSummary" type="button" class="health" style="width:100%;text-align:left;cursor:pointer" aria-expanded="false">
+      <span id="eventsSummaryText" style="font-size:13px">变化事件 · 暂无数据</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--muted)">▸</span>
+    </button>
 
-      <!-- Card 2: Node Count & P2P Ratio -->
-      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">节点数 (Peers)</span>
-          <span class="p-2 rounded-lg bg-indigo-500/10 text-indigo-500">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </span>
-        </div>
-        <div class="mt-3 flex items-baseline justify-between">
-          <b id="count" class="text-2xl font-bold font-mono-num tracking-tight text-slate-900 dark:text-white">0</b>
-          <span id="p2pRateBadge" class="text-xs font-medium text-slate-500 dark:text-slate-400">p2p 直连率 -</span>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60">
-          <div class="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mb-1.5">
-            <span id="breakdownText">p2p: - · relay: - · Local: -</span>
-          </div>
-          <div class="w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
-            <div id="barP2P" class="bg-emerald-500 h-full transition-all duration-300" style="width: 0%"></div>
-            <div id="barRelay" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%"></div>
-            <div id="barLocal" class="bg-indigo-500 h-full transition-all duration-300" style="width: 0%"></div>
+    <section aria-label="核心状态指标" class="kpis">
+      <div class="kpi" id="kpiRelay">
+        <div class="kpi-label"><span class="dot" id="relayDot" data-state="ok"></span>中继</div>
+        <div class="kpi-value"><span id="conn">—</span><span class="unit">连接</span></div>
+        <div class="kpi-sub" id="relay">—</div>
+        <div class="kpi-spark" id="sparkConn"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">节点</div>
+        <div class="kpi-value"><span id="count">—</span><span class="unit" id="countTotal"></span></div>
+        <div class="kpi-sub" id="p2pRateBadge">—</div>
+        <div class="kpi-spark" id="sparkNodes"></div>
+        <div class="kpi-foot">
+          <div id="breakdownText">—</div>
+          <div class="bar" style="margin-top:6px">
+            <div id="barP2P" class="bar-p2p" style="width:0%"></div>
+            <div id="barRelay" class="bar-relay" style="width:0%"></div>
+            <div id="barLocal" class="bar-local" style="width:0%"></div>
           </div>
         </div>
       </div>
-
-      <!-- Card 3: Network Telemetry -->
-      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">组网延迟与吞吐</span>
-          <span class="p-2 rounded-lg bg-cyan-500/10 text-cyan-500">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          </span>
-        </div>
-        <div class="mt-3 flex items-baseline justify-between">
-          <div class="flex items-baseline gap-1">
-            <b id="avgLat" class="text-2xl font-bold font-mono-num tracking-tight text-slate-900 dark:text-white">-</b>
-            <span class="text-xs text-slate-500 dark:text-slate-400">ms</span>
-          </div>
-          <span id="avgLoss" class="text-xs font-mono-num px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">丢包 -</span>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-          <span>上报视角累计收发 (rx / tx)</span>
-          <span id="totalTraffic" class="font-mono-num text-slate-700 dark:text-slate-300">- / -</span>
-        </div>
+      <div class="kpi">
+        <div class="kpi-label">延迟</div>
+        <div class="kpi-value" id="avgLatWrap"><span id="avgLat">—</span><span class="unit">ms</span></div>
+        <div class="kpi-sub" id="avgLoss">—</div>
+        <div class="kpi-foot"><span id="totalTraffic">—</span></div>
+        <div class="kpi-spark" id="sparkLat"></div>
       </div>
-
-      <!-- Card 4: Data Source & Freshness -->
-      <div class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 p-5 shadow-xs flex flex-col justify-between transition-colors">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">数据来源 (Reporter)</span>
-          <span class="p-2 rounded-lg bg-violet-500/10 text-violet-500">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </span>
-        </div>
-        <div class="mt-3 flex items-baseline justify-between gap-2">
-          <b id="src" class="text-xl font-bold tracking-tight text-slate-900 dark:text-white truncate" title="上报节点标识">暂无上报</b>
-          <span id="age" class="text-xs font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 shrink-0">等待节点上报</span>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/60 text-[11px] text-slate-500 dark:text-slate-400">
-          <span>上报源数量: <strong id="reporterCount" class="font-mono-num text-slate-700 dark:text-slate-300">0</strong></span>
-          <span id="lastSyncTime" class="font-mono-num">同步正常</span>
-        </div>
+      <div class="kpi">
+        <div class="kpi-label">流量速率</div>
+        <div class="kpi-value"><span id="trafficRate">—</span></div>
+        <div class="kpi-sub" id="trafficRateSub">—</div>
+        <div class="kpi-foot"><span id="trafficTotal">—</span></div>
+        <div class="kpi-spark" id="sparkTraffic"></div>
       </div>
     </section>
 
-    <!-- Lightweight Coarse-Dot SVG WAN IP Topology Map (Theme-Synced with Page) -->
-    <section aria-label="节点拓扑图" class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 shadow-xs overflow-hidden transition-colors">
-      <!-- Map Header Toolbar -->
-      <div class="px-4 sm:px-6 py-3.5 border-b border-slate-200/70 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center gap-3">
-          <div class="flex items-center gap-2">
-            <span class="w-2.5 h-2.5 rounded-full bg-teal-500 dark:bg-teal-400 shadow-[0_0_8px_rgba(20,184,166,0.6)]"></span>
-            <h2 class="text-sm font-semibold tracking-tight text-slate-900 dark:text-white">节点拓扑图</h2>
-          </div>
+
+    <section class="panel" aria-label="节点列表">
+      <div class="panel-head">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" data-filter="all" class="chip" aria-pressed="true">全部 <span id="tabCountAll" class="num">0</span></button>
+          <button type="button" data-filter="bad" class="chip" data-state="bad" aria-pressed="false">异常 <span id="tabCountBad" class="num">0</span></button>
+          <button type="button" data-filter="relay" class="chip" aria-pressed="false">中继 <span id="tabCountRelay" class="num">0</span></button>
+          <button type="button" data-filter="p2p" class="chip" aria-pressed="false">直连 <span id="tabCountP2p" class="num">0</span></button>
         </div>
-
-        <!-- Map Controls -->
-        <div class="flex flex-wrap items-center gap-2">
-          <!-- Region Preset Buttons -->
-          <div class="inline-flex rounded-lg p-0.5 bg-slate-200/70 dark:bg-slate-800/90 border border-slate-300/60 dark:border-slate-700/70 text-[11px]">
-            <button type="button" data-map-preset="auto" class="map-preset-btn px-2.5 py-1 rounded-md font-medium bg-indigo-600 text-white shadow-2xs transition-colors">
-              自适应聚焦
-            </button>
-            <button type="button" data-map-preset="world" class="map-preset-btn px-2.5 py-1 rounded-md font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors">
-              全球视图
-            </button>
-          </div>
-
-          <!-- Custom Geo Override Button -->
-          <button id="btnOpenGeoModal" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/70 transition-colors">
-            自定义地理
-          </button>
-
-          <!-- Collapse Map Toggle -->
-          <button id="btnToggleMap" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/70 transition-colors">
-            收起地图
-          </button>
+        <div class="search-wrap" style="max-width:288px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <input id="searchInput" type="text" placeholder="搜索 IP / 主机名" class="input">
+          <kbd>/</kbd>
         </div>
       </div>
-
-      <!-- Map SVG Viewport Container -->
-      <div id="mapBodyWrap" class="relative w-full select-none overflow-hidden transition-colors" style="aspect-ratio: 1000 / 420;">
-        <svg id="geoMapCanvas" viewBox="0 0 1000 420" preserveAspectRatio="xMidYMid meet" class="w-full h-full block cursor-grab active:cursor-grabbing" style="background: radial-gradient(circle at 50% 45%, var(--map-bg-start), var(--map-bg-end));">
-          <defs>
-            <filter id="nodeGlow" x="-40%" y="-40%" width="180%" height="180%">
-              <feGaussianBlur stdDeviation="3.5" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
+      <div id="tableViewWrap" class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th data-sort="hostname" role="button" tabindex="0" aria-sort="none">节点 <span class="sort-indicator" data-col="hostname"></span></th>
+              <th data-sort="cost" role="button" tabindex="0" aria-sort="none">链路 <span class="sort-indicator" data-col="cost"></span></th>
+              <th class="num-col" data-sort="lat_ms" role="button" tabindex="0" aria-sort="none">延迟 ms <span class="sort-indicator" data-col="lat_ms"></span></th>
+              <th class="num-col" data-sort="loss_rate" role="button" tabindex="0" aria-sort="none">丢包 <span class="sort-indicator" data-col="loss_rate"></span></th>
+              <th class="num-col" data-sort="rx_bytes" role="button" tabindex="0" aria-sort="none">流量 <span class="sort-indicator" data-col="rx_bytes"></span></th>
+              <th>地区</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="cardsViewWrap" class="cards"></div>
+      <div id="emptyState" class="empty" hidden>
+        <p id="emptyStateTitle" class="title">无匹配节点</p>
+        <p class="sub"><button id="btnClearFilter" type="button" class="btn" style="margin-top:8px">清除筛选</button></p>
+      </div>
+    </section>
+    <section class="panel" id="eventsSection" aria-label="节点变化事件" hidden>
+      <div class="panel-head">
+        <h2>节点变化事件</h2>
+        <button id="btnToggleEvents" type="button" class="btn" aria-expanded="false">收起</button>
+      </div>
+      <div id="eventsList" style="padding:8px 16px"></div>
+    </section>
+    <section class="panel" aria-label="节点拓扑图">
+      <div class="panel-head">
+        <h2>节点拓扑图</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div class="seg">
+            <button type="button" data-map-preset="auto" class="map-preset-btn" aria-pressed="true">自适应聚焦</button>
+            <button type="button" data-map-preset="world" class="map-preset-btn" aria-pressed="false">全球视图</button>
+          </div>
+          <button id="btnOpenGeoModal" type="button" class="btn">位置标注</button>
+          <button id="btnToggleMap" type="button" class="btn" aria-expanded="true">收起地图</button>
+        </div>
+      </div>
+      <div id="mapBodyWrap" class="map-wrap">
+        <svg id="geoMapCanvas" viewBox="0 0 1000 420" preserveAspectRatio="xMidYMid meet">
           <g id="svgScene">
-          <!-- Layer 1: Coarse Dot-Matrix Land Grid -->
           <g id="svgLandDots"></g>
-          <!-- Layer 0: Simplified country outlines, filled with flag -->
           <g id="svgCountries"></g>
-          <!-- Layer 2: Curved Network Arcs & Animated Flow -->
           <g id="svgLinks"></g>
-          <!-- Layer 3: Arc Pill Badges -->
           <g id="svgPills"></g>
-          <!-- Layer 4: Glowing Nodes & City Labels -->
           <g id="svgNodes"></g>
           </g>
         </svg>
-
-        <!-- Unlocated nodes: real peers without coordinates are listed here, never guessed onto the map -->
-        <div id="unlocatedWrap" class="hidden border-t border-slate-200/70 dark:border-slate-800/80 px-4 sm:px-6 py-3 text-xs text-slate-600 dark:text-slate-300">
-          <span class="font-medium text-slate-800 dark:text-slate-200">未定位节点（无上报坐标、未手动标注，不在地图上显示）：</span>
-          <span id="unlocatedList"></span>
+        <div class="map-legend">
+          <span>● 直连</span><span>┄ 中继</span><span>○ 本机</span>
         </div>
-
-        <!-- Floating Zoom & Reset Controls (Bottom Right) -->
-        <div class="absolute bottom-3.5 right-4 flex items-center gap-1 bg-white/90 dark:bg-[#0e1422]/90 backdrop-blur-md border border-slate-200/90 dark:border-slate-800/90 rounded-xl p-1 shadow-md">
-          <button id="btnZoomIn" type="button" class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-mono text-sm" title="放大地图">+</button>
-          <button id="btnZoomOut" type="button" class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors font-mono text-sm" title="缩小地图">−</button>
-          <button id="btnZoomReset" type="button" class="px-2 h-7 rounded-lg flex items-center justify-center text-[11px] text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title="重置视野">重置</button>
+        <div class="map-zoom">
+          <button id="btnZoomIn" type="button" title="放大">+</button>
+          <button id="btnZoomOut" type="button" title="缩小">−</button>
+          <button id="btnZoomReset" type="button" style="width:auto;padding:0 8px;font-size:12px" title="重置视野">重置</button>
         </div>
-
-        <!-- Legend (Top Left) -->
-        <div class="absolute top-3 left-4 hidden sm:flex flex-wrap items-center gap-3.5 bg-white/90 dark:bg-[#0e1422]/85 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 rounded-xl px-3.5 py-2 text-[11px] text-slate-600 dark:text-slate-300 pointer-events-none shadow-xs">
-          <span class="inline-flex items-center gap-1.5">
-            <span class="w-2.5 h-2.5 rounded-full bg-[#14b8a6]"></span> Local (本机上报节点)
-          </span>
-          <span class="inline-flex items-center gap-1.5">
-            <span class="w-2.5 h-2.5 rounded-full bg-[#10b981]"></span> p2p (udp / quic 直连)
-          </span>
-          <span class="inline-flex items-center gap-1.5">
-            <span class="w-2.5 h-2.5 rounded-full bg-[#a855f7]"></span> p2p (wg / tcp 直连)
-          </span>
-          <span class="inline-flex items-center gap-1.5">
-            <span class="w-2.5 h-2.5 rounded-full bg-[#f59e0b]"></span> relay (wss 中继转发)
-          </span>
-          <span class="text-slate-400 dark:text-slate-500">拖拽平移 · 滚轮缩放 · 点击节点查看详情</span>
-        </div>
-
-        <!-- Hover Tooltip on Map -->
-        <div id="mapTooltip" class="pointer-events-none absolute z-20 hidden rounded-xl bg-white/95 dark:bg-[#0d1322]/95 border border-slate-200 dark:border-slate-700/80 px-3.5 py-2.5 text-xs text-slate-800 dark:text-slate-100 shadow-xl backdrop-blur-md min-w-[210px]"></div>
+        <div id="mapTooltip" class="map-tooltip" hidden></div>
       </div>
-    </section>
-
-    <!-- Main Peers Section -->
-    <section class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 shadow-xs overflow-hidden transition-colors">
-      <!-- Toolbar: Filters, Search & View Toggle -->
-      <div class="p-4 sm:px-6 border-b border-slate-200/70 dark:border-slate-800/80 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3.5">
-        <!-- Left: Filter Tabs -->
-        <div class="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
-          <button type="button" data-filter="all" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-indigo-600 text-white shadow-2xs">
-            全部 <span id="tabCountAll" class="ml-1 opacity-80 font-mono-num">0</span>
-          </button>
-          <button type="button" data-filter="p2p" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800">
-            P2P 直连 <span id="tabCountP2p" class="ml-1 opacity-75 font-mono-num">0</span>
-          </button>
-          <button type="button" data-filter="relay" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800">
-            Relay 中继 <span id="tabCountRelay" class="ml-1 opacity-75 font-mono-num">0</span>
-          </button>
-          <button type="button" data-filter="local" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800">
-            本机节点 <span id="tabCountLocal" class="ml-1 opacity-75 font-mono-num">0</span>
-          </button>
-        </div>
-
-        <!-- Right: Search Input & View Switcher -->
-        <div class="flex items-center gap-2.5">
-          <div class="relative flex-1 sm:w-72">
-            <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input id="searchInput" type="text" placeholder="搜索虚拟 IP、主机名、协议、NAT..." class="w-full pl-9 pr-14 py-1.5 text-xs rounded-lg bg-slate-100 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:bg-white dark:focus:bg-slate-800 transition-all">
-            <kbd class="hidden sm:inline-block absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded">/</kbd>
-          </div>
-
-          <!-- View Switcher: Table vs Grid Cards -->
-          <div class="inline-flex rounded-lg p-0.5 bg-slate-100 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/70">
-            <button id="btnViewTable" type="button" class="px-2.5 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-2xs transition-all" title="表格视图">
-              表格
-            </button>
-            <button id="btnViewCards" type="button" class="px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-all" title="卡片视图">
-              卡片
-            </button>
-          </div>
-        </div>
+      <div id="unlocatedWrap" class="unlocated" hidden>
+        <span>未定位 </span><span id="unlocatedList"></span>
       </div>
-
-      <!-- Table View -->
-      <div id="tableViewWrap" class="overflow-x-auto">
-        <table class="w-full text-left border-collapse">
-          <thead>
-            <tr class="border-b border-slate-200/70 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 select-none">
-              <th class="py-3 px-4 sm:px-6 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" role="button" tabindex="0" aria-sort="none" data-sort="ipv4">
-                <div class="inline-flex items-center gap-1">虚拟 IP <span class="sort-indicator" data-col="ipv4"></span></div>
-              </th>
-              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" role="button" tabindex="0" aria-sort="none" data-sort="hostname">
-                <div class="inline-flex items-center gap-1">主机名 <span class="sort-indicator" data-col="hostname"></span></div>
-              </th>
-              <th class="py-3 px-4">WAN IP / 地区</th>
-              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" role="button" tabindex="0" aria-sort="none" data-sort="cost">
-                <div class="inline-flex items-center gap-1">连接 (cost) <span class="sort-indicator" data-col="cost"></span></div>
-              </th>
-              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" role="button" tabindex="0" aria-sort="none" data-sort="lat_ms">
-                <div class="inline-flex items-center gap-1">延迟 ms <span class="sort-indicator" data-col="lat_ms"></span></div>
-              </th>
-              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" role="button" tabindex="0" aria-sort="none" data-sort="loss_rate">
-                <div class="inline-flex items-center gap-1">丢包 <span class="sort-indicator" data-col="loss_rate"></span></div>
-              </th>
-              <th class="py-3 px-4 cursor-pointer hover:text-slate-800 dark:hover:text-slate-200 transition-colors" role="button" tabindex="0" aria-sort="none" data-sort="rx_bytes">
-                <div class="inline-flex items-center gap-1">收 / 发 <span class="sort-indicator" data-col="rx_bytes"></span></div>
-              </th>
-              <th class="py-3 px-4">协议</th>
-              <th class="py-3 px-4 sm:pr-6">NAT 类型</th>
-            </tr>
-          </thead>
-          <tbody id="rows" class="divide-y divide-slate-200/60 dark:divide-slate-800/60 text-sm"></tbody>
-        </table>
-      </div>
-
-      <!-- Cards View -->
-      <div id="cardsViewWrap" class="hidden p-4 sm:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-
-      <!-- Empty State -->
-      <div id="emptyState" class="hidden py-14 px-4 text-center">
-        <div class="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800/80 text-slate-400 mx-auto flex items-center justify-center mb-3">
-          <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </div>
-        <p id="emptyStateTitle" class="text-sm font-medium text-slate-700 dark:text-slate-300">未找到匹配的组网节点</p>
-        <p id="emptyStateSub" class="text-xs text-slate-500 dark:text-slate-400 mt-1">请尝试清除搜索词或切换连接状态过滤条件</p>
-      </div>
-    </section>
-    <!-- Node Change Events (live /api/events) -->
-    <section class="rounded-2xl bg-white dark:bg-[#11151f] border border-slate-200/80 dark:border-slate-800/80 shadow-xs overflow-hidden transition-colors">
-      <div class="px-4 sm:px-6 py-3.5 border-b border-slate-200/70 dark:border-slate-800/80">
-        <h2 class="text-sm font-semibold tracking-tight text-slate-900 dark:text-white">节点变化事件</h2>
-      </div>
-      <div id="eventsList" class="px-4 sm:px-6 py-2"></div>
     </section>
   </main>
 
-  <!-- Footer -->
-  <footer class="relative z-10 border-t border-slate-200/60 dark:border-slate-800/60 py-4 px-4 sm:px-6 lg:px-8 text-xs text-slate-500 dark:text-slate-400">
-    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-      <div class="flex items-center gap-2">
-        <span class="font-medium text-slate-700 dark:text-slate-300">EasyTier Hub</span>
-        <span>·</span>
-        <span>EasyTier Hub</span>
-      </div>
+  <footer>
+    <div class="inner">
+      <span>EasyTier 2.7.0 · 10.10.1.0/24</span>
+      <span id="footerTime" class="num">—</span>
     </div>
   </footer>
 
   <!-- Peer Details Modal -->
-  <div id="peerModal" role="dialog" aria-modal="true" aria-labelledby="modalPeerTitle" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
-    <div class="bg-white dark:bg-[#131824] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden">
-      <div class="px-5 py-4 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between">
-        <div class="flex items-center gap-2.5">
-          <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
-          <h3 id="modalPeerTitle" class="text-sm font-semibold text-slate-900 dark:text-white">节点详情</h3>
+  <div id="peerModal" role="dialog" aria-modal="true" aria-labelledby="modalPeerTitle" class="modal" hidden>
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="dot" id="modalPeerDot" data-state="ok"></span>
+          <h3 id="modalPeerTitle">节点详情</h3>
         </div>
-        <button id="btnClosePeerModal" type="button" aria-label="关闭节点详情" class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <button id="btnClosePeerModal" type="button" aria-label="关闭节点详情" class="icon-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
-      <div class="p-5 space-y-4">
-        <div id="modalPeerGrid" class="grid grid-cols-2 gap-3 text-xs"></div>
-        <div>
-          <div class="flex items-center justify-between mb-1.5">
-            <span class="text-xs font-medium text-slate-500 dark:text-slate-400">easytier-cli peer 原始上报 JSON</span>
-            <button id="btnCopyPeerJson" type="button" class="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-medium">复制 JSON</button>
+      <div class="modal-body">
+        <div id="modalPeerGrid" class="kv-grid"></div>
+        <details>
+          <summary style="font-size:12px;font-weight:500;color:var(--muted);cursor:pointer">原始数据</summary>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+            <span style="font-size:12px;color:var(--muted)">easytier-cli peer 原始上报 JSON</span>
+            <button id="btnCopyPeerJson" type="button" class="btn">复制 JSON</button>
           </div>
-          <pre id="modalPeerRaw" class="p-3 rounded-xl bg-slate-900 text-slate-200 font-mono text-[11px] overflow-x-auto max-h-56 leading-relaxed"></pre>
-        </div>
+          <pre id="modalPeerRaw" class="code"></pre>
+        </details>
       </div>
     </div>
   </div>
 
   <!-- WAN IP Geo Calibration & Custom Node Editor Modal -->
-  <div id="geoModal" role="dialog" aria-modal="true" aria-label="自定义节点地理" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
-    <div class="bg-white dark:bg-[#131824] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden max-h-[88vh] flex flex-col">
-      <div class="px-6 py-4 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between shrink-0">
-        <div>
-          <h3 class="text-base font-semibold text-slate-900 dark:text-white">节点位置手动标注</h3>
-        </div>
-        <button id="btnCloseGeoModal" type="button" aria-label="关闭自定义地理" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+  <div id="geoModal" role="dialog" aria-modal="true" aria-label="位置标注" class="modal" hidden>
+    <div class="modal-panel wide">
+      <div class="modal-head">
+        <h3>位置标注</h3>
+        <button id="btnCloseGeoModal" type="button" aria-label="关闭位置标注" class="icon-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
-      <div class="p-6 overflow-y-auto space-y-5 text-xs">
+      <div class="modal-body">
         <div>
-          <div class="flex items-center justify-between mb-2">
-            <span class="font-semibold text-slate-800 dark:text-slate-200">当前 EasyTier 节点位置配置 (仅本浏览器本地保存)</span>
-            <button id="btnResetGeoOverrides" type="button" class="text-rose-500 hover:underline">恢复默认配置</button>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <span style="font-weight:600">位置 <span style="font-size:12px;color:var(--muted);font-weight:400">本地</span></span>
           </div>
-          <div id="geoOverrideList" class="space-y-2.5"></div>
+          <div id="geoOverrideList" style="display:flex;flex-direction:column;gap:10px"></div>
         </div>
+        <div><button id="btnResetGeoOverrides" type="button" class="btn">全部重置</button></div>
       </div>
     </div>
   </div>
 
   <!-- Toast（复制/操作提示，showToast 会 remove hidden + add flex）-->
-  <div id="toast" role="status" aria-live="polite" class="hidden fixed left-1/2 -translate-x-1/2 bottom-6 z-50 items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900/90 dark:bg-slate-100/90 text-white dark:text-slate-900 text-sm shadow-lg">
-    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
+  <div id="toast" role="status" aria-live="polite" class="toast" hidden>
     <span id="toastText">已复制到剪贴板</span>
   </div>
 
@@ -550,25 +498,10 @@
     // 1. PRE-BAKED COARSE GEOGRAPHIC DOT GRID ([pac_lon, lat])
     // =========================================================================
     const COUNTRY_POLYS = {"CN":[[[127.66,49.76],[130.99,47.79],[132.51,47.79],[135.03,48.48],[133.1,45.14],[131.03,44.97],[131.14,42.93],[130.64,42.4],[129.99,42.99],[129.6,42.42],[128.05,41.99],[128.21,41.47],[126.87,41.82],[124.27,39.93],[122.13,39.17],[121.05,38.9],[121.64,40.95],[119.02,39.25],[118.04,39.2],[117.53,38.74],[119.7,37.16],[120.82,37.87],[122.36,37.45],[122.52,36.93],[121.1,36.65],[119.15,34.91],[121.91,31.69],[121.26,30.68],[122.09,29.83],[121.68,28.23],[121.13,28.14],[118.66,24.55],[115.89,22.78],[110.79,21.4],[110.44,20.34],[109.86,21.4],[107.04,21.81],[105.33,23.35],[101.65,22.32],[101.8,21.17],[101.27,21.2],[101.15,21.85],[99.24,22.12],[98.66,24.06],[97.6,23.9],[97.72,25.08],[98.67,25.92],[98.68,27.51],[96.25,28.41],[96.12,29.45],[94.57,29.28],[92.5,27.9],[90.02,28.3],[88.81,27.3],[88.73,28.09],[85.82,28.2],[78.74,31.52],[78.91,34.32],[76.19,35.9],[73.82,39.89],[75.47,40.56],[76.53,40.43],[76.9,41.07],[78.19,41.19],[80.12,42.12],[80.87,43.18],[79.97,44.92],[82.46,45.54],[83.18,47.33],[85.16,47.0],[85.77,48.46],[87.75,49.3],[90.97,46.89],[90.95,45.29],[95.31,44.24],[96.35,42.73],[100.85,42.66],[104.96,41.6],[110.41,42.87],[111.83,43.74],[111.87,45.1],[113.46,44.81],[115.99,45.73],[117.42,46.67],[119.66,46.69],[118.06,48.07],[115.49,48.14],[116.68,49.89],[117.88,49.51],[119.29,50.14],[121.0,53.25],[125.95,52.79],[127.66,49.76]],[[110.34,18.68],[109.48,18.2],[108.66,18.51],[109.12,19.82],[110.79,20.08],[110.34,18.68]]],"DE":[[[9.92,54.98],[10.94,54.01],[12.52,54.47],[14.35,53.25],[15.02,51.11],[12.24,50.27],[13.6,48.88],[12.93,47.47],[7.47,47.62],[8.1,49.02],[6.19,49.46],[6.91,53.48],[8.8,54.02],[8.53,54.96],[9.92,54.98]]],"FR":[[[3.59,50.38],[8.1,49.02],[6.04,46.73],[7.44,43.69],[6.53,43.13],[3.1,43.08],[2.99,42.47],[1.83,42.34],[-1.9,43.42],[-1.19,46.01],[-4.49,47.95],[-4.59,48.68],[-1.62,48.64],[-1.93,49.78],[-0.99,49.35],[2.51,51.15],[3.59,50.38]],[[9.56,42.15],[9.23,41.38],[8.54,42.26],[9.39,43.01],[9.56,42.15]]],"GB":[[[-3.01,58.63],[-4.07,57.55],[-1.96,57.68],[-3.12,55.97],[-2.09,55.91],[0.47,52.93],[1.68,52.74],[1.45,51.29],[-5.25,49.96],[-3.41,51.43],[-5.27,51.99],[-4.22,52.3],[-4.58,53.5],[-3.09,53.4],[-2.95,53.98],[-4.84,54.79],[-5.05,55.78],[-5.59,55.31],[-6.15,56.79],[-5.01,58.63],[-3.01,58.63]],[[-5.66,54.55],[-6.2,53.87],[-7.57,54.06],[-7.57,55.13],[-5.66,54.55]]],"JP":[[[140.98,37.14],[140.25,35.14],[137.22,34.61],[135.79,33.46],[135.08,34.6],[130.99,33.89],[132.0,33.15],[130.69,31.03],[129.41,33.3],[130.35,33.6],[132.62,35.43],[135.68,35.53],[136.72,37.3],[137.39,36.83],[138.86,37.83],[140.31,41.2],[141.91,39.99],[140.98,37.14]],[[143.91,44.17],[145.54,43.26],[144.06,42.99],[143.18,42.0],[141.61,42.68],[141.07,41.58],[139.96,41.57],[141.97,45.55],[143.91,44.17]],[[134.64,34.15],[134.2,33.2],[133.79,33.52],[133.01,32.7],[132.92,34.06],[134.64,34.15]]],"KR":[[[128.35,38.61],[129.09,35.08],[126.49,34.39],[126.17,37.75],[128.35,38.61]]],"NL":[[[6.07,53.51],[7.09,53.14],[6.16,50.8],[4.97,51.48],[3.31,51.35],[6.07,53.51]]],"US":[[[-94.82,49.39],[-94.33,48.67],[-89.6,48.01],[-88.38,48.3],[-84.14,46.51],[-82.55,45.35],[-82.69,41.68],[-74.87,45.0],[-71.51,45.01],[-69.24,47.45],[-67.79,47.07],[-66.96,44.81],[-70.12,43.68],[-70.83,42.34],[-69.97,41.64],[-73.71,40.93],[-71.94,40.93],[-73.95,40.75],[-74.91,38.94],[-75.53,39.5],[-75.94,37.22],[-76.35,39.15],[-76.99,38.24],[-75.73,35.55],[-81.34,31.44],[-80.38,25.21],[-81.17,25.2],[-81.71,25.87],[-82.93,29.1],[-84.1,30.09],[-85.11,29.64],[-86.4,30.4],[-89.18,30.32],[-89.41,29.16],[-93.23,29.78],[-94.69,29.48],[-97.14,27.83],[-97.53,25.84],[-99.02,26.37],[-100.96,29.38],[-102.48,29.76],[-103.11,28.97],[-103.94,29.27],[-106.51,31.75],[-111.02,31.33],[-114.72,32.72],[-117.13,32.54],[-118.52,34.03],[-120.62,34.61],[-124.4,40.31],[-124.57,48.38],[-123.12,48.04],[-122.59,47.1],[-122.84,49],[-94.82,49.39]],[[-155.07,71.15],[-154.34,70.7],[-152.21,70.83],[-150.74,70.43],[-143.59,70.15],[-140.99,69.71],[-141.0,60.31],[-139.04,60.0],[-137.45,58.91],[-135.48,59.79],[-130.01,55.92],[-130.54,54.8],[-134.08,58.12],[-136.63,58.21],[-139.87,59.54],[-142.57,60.08],[-143.96,60.0],[-147.11,60.88],[-151.72,59.16],[-150.62,61.28],[-158.43,55.99],[-164.79,54.4],[-157.04,58.92],[-161.97,58.67],[-166.12,61.5],[-160.78,64.79],[-164.96,64.45],[-168.11,65.67],[-163.65,66.58],[-163.79,66.08],[-161.68,66.12],[-166.76,68.36],[-155.07,71.15]],[[-155.54,19.08],[-156.07,19.7],[-155.22,19.99],[-155.54,19.08]],[[-153.01,57.12],[-154.01,56.73],[-152.56,57.9],[-153.01,57.12]],[[-165.58,59.91],[-166.19,59.75],[-165.67,60.29],[-165.58,59.91]],[[-171.73,63.78],[-168.69,63.3],[-169.53,62.98],[-171.73,63.78]]]};
-    const FLAG_FILES = {"DE":{"vb":"0 0 5 3","inner":"<path d=\"M0 0h5v3H0z\"/><path fill=\"#D00\" d=\"M0 1h5v2H0z\"/><path fill=\"#FFCE00\" d=\"M0 2h5v1H0z\"/>"},"FR":{"vb":"0 0 900 600","inner":"<path fill=\"#CE1126\" d=\"M0 0h900v600H0\"/><path fill=\"#fff\" d=\"M0 0h600v600H0\"/><path fill=\"#002654\" d=\"M0 0h300v600H0\"/>"},"NL":{"vb":"0 0 9 6","inner":"<path fill=\"#21468B\" d=\"M0 0h9v6H0z\"/><path fill=\"#FFF\" d=\"M0 0h9v4H0z\"/><path fill=\"#AE1C28\" d=\"M0 0h9v2H0z\"/>"},"JP":{"vb":"0 0 900 600","inner":"<path fill=\"#fff\" d=\"M0 0h900v600H0z\"/><circle fill=\"#bc002d\" cx=\"450\" cy=\"300\" r=\"180\"/>"},"CN":{"vb":"0 0 900 600","inner":"<path fill=\"#EE1C25\" d=\"M0 0h900v600H0\"/><g transform=\"matrix(3 0 0 3 150 150)\"><path id=\"cn-a\" fill=\"#FF0\" d=\"m0-30 17.634 54.27-46.166-33.54h57.064l-46.166 33.54Z\"/></g><use xlink:href=\"#cn-a\" transform=\"rotate(23.036 2.784 766.082)\"/><use xlink:href=\"#cn-a\" transform=\"rotate(45.87 38.201 485.396)\"/><use xlink:href=\"#cn-a\" transform=\"rotate(69.945 29.892 362.328)\"/><use xlink:href=\"#cn-a\" transform=\"rotate(20.66 -590.66 957.955)\"/>"},"KR":{"vb":"-72 -48 144 96","inner":"<path fill=\"#fff\" d=\"M-72-48v96H72v-96z\"/><g stroke=\"#000\" stroke-width=\"4\"><path d=\"M-34.946-37.72-48.26-17.75m4.992 3.328 13.313-19.97m4.992 3.329-13.312 19.969m63.236 42.157 6.101-9.152m1.11-1.664 6.101-9.153m4.993 3.328-6.102 9.153m-1.11 1.664-6.101 9.152m4.992 3.329 6.102-9.153m1.11-1.664 6.1-9.153M-48.259 17.75l13.313 19.97m4.992-3.329-6.102-9.152m-1.109-1.664-6.102-9.153m4.993-3.328 13.312 19.97m63.236-42.158-6.101-9.153m-1.11-1.664-6.101-9.152m4.992-3.328 13.313 19.969m4.992-3.328-6.102-9.153m-1.11-1.664-6.1-9.153\"/></g><path fill=\"#cd2e3a\" d=\"M9.985 6.656A18 18 0 1 1-19.97-13.313a24 24 0 1 1 39.938 26.626\"/><path fill=\"#0047a0\" d=\"M0 0a12 12 0 1 1 19.97 13.313 24 24 0 1 1-39.94-26.626A12 12 0 1 0 0 0\"/>"},"GB":{"vb":"0 0 60 30","inner":"<clipPath id=\"gb-a\"><path d=\"M0 0v30h60V0z\"/></clipPath><clipPath id=\"gb-b\"><path d=\"M30 15h30v15zv15H0zH0V0zV0h30z\"/></clipPath><g clip-path=\"url(#gb-a)\"><path d=\"M0 0v30h60V0z\" fill=\"#012169\"/><path d=\"m0 0 60 30m0-30L0 30\" stroke=\"#fff\" stroke-width=\"6\"/><path d=\"m0 0 60 30m0-30L0 30\" clip-path=\"url(#gb-b)\" stroke=\"#C8102E\" stroke-width=\"4\"/><path d=\"M30 0v30M0 15h60\" stroke=\"#fff\" stroke-width=\"10\"/><path d=\"M30 0v30M0 15h60\" stroke=\"#C8102E\" stroke-width=\"6\"/></g>"},"US":{"vb":"0 0 7410 3900","inner":"<path fill=\"#b31942\" d=\"M0 0h7410v3900H0\"/><path stroke=\"#FFF\" stroke-width=\"300\" d=\"M0 450h7410m0 600H0m0 600h7410m0 600H0m0 600h7410m0 600H0\"/><path fill=\"#0a3161\" d=\"M0 0h2964v2100H0\"/><g fill=\"#FFF\"><g id=\"us-d\"><g id=\"us-c\"><g id=\"us-e\"><g id=\"us-b\"><path id=\"us-a\" d=\"m247 90 70.534 217.082-184.66-134.164h228.253L176.466 307.082z\"/><use xlink:href=\"#us-a\" y=\"420\"/><use xlink:href=\"#us-a\" y=\"840\"/><use xlink:href=\"#us-a\" y=\"1260\"/></g><use xlink:href=\"#us-a\" y=\"1680\"/></g><use xlink:href=\"#us-b\" x=\"247\" y=\"210\"/></g><use xlink:href=\"#us-c\" x=\"494\"/></g><use xlink:href=\"#us-d\" x=\"988\"/><use xlink:href=\"#us-c\" x=\"1976\"/><use xlink:href=\"#us-e\" x=\"2470\"/></g>"}};
     // 卡片下半部分的国旗水印用；HK 为简化版区旗（红底 + 白色紫荆花五瓣）
-    const HK_FLAG = { vb: '0 0 900 600', inner: '<path fill="#DE2910" d="M0 0h900v600H0z"/><g fill="#fff" transform="translate(450 300)"><ellipse rx="26" ry="58" cy="-62"/><ellipse rx="26" ry="58" cy="-62" transform="rotate(72)"/><ellipse rx="26" ry="58" cy="-62" transform="rotate(144)"/><ellipse rx="26" ry="58" cy="-62" transform="rotate(216)"/><ellipse rx="26" ry="58" cy="-62" transform="rotate(288)"/><circle r="20"/></g>' };
 
     // 国旗背景：清晰的那一层保持原始比例（meet），另一层拉伸后重度模糊当同色系底。
     // 之前用 preserveAspectRatio="none" 硬拉伸，比例明显失真（卡片 3:1，旗帜多为 1.5~1.9:1）。
-    function flagLayer(country) {
-      const code = String(country || '').toUpperCase();
-      const f = code === 'HK' ? HK_FLAG : FLAG_FILES[code];
-      if (!f) return '';
-      return `
-        <div class="absolute inset-0 pointer-events-none overflow-hidden opacity-[0.55] dark:opacity-[0.50]">
-          <svg viewBox="${f.vb}" preserveAspectRatio="none" style="filter:blur(18px) saturate(1.15);transform:scale(1.25)" class="w-full h-full">${f.inner}</svg>
-        </div>
-        <div class="absolute inset-0 pointer-events-none overflow-hidden opacity-[0.55] dark:opacity-[0.60]"
-             style="mask-image:linear-gradient(to right, transparent 0%, #000 26%);-webkit-mask-image:linear-gradient(to right, transparent 0%, #000 26%)">
-          <svg viewBox="${f.vb}" preserveAspectRatio="xMaxYMax meet" class="w-full h-full">${f.inner}</svg>
-        </div>`;
-    }
 
     const COARSE_LAND_DOTS = [[287.5,-45.0],[294.0,-45.0],[287.5,-40.0],[294.0,-40.0],[300.5,-40.0],[294.0,-35.0],[300.5,-35.0],[142.0,-35.0],[148.5,-35.0],[294.0,-30.0],[300.5,-30.0],[307.0,-30.0],[18.5,-30.0],[25.0,-30.0],[116.0,-30.0],[122.5,-30.0],[129.0,-30.0],[135.5,-30.0],[142.0,-30.0],[148.5,-30.0],[294.0,-25.0],[300.5,-25.0],[307.0,-25.0],[313.5,-25.0],[18.5,-25.0],[25.0,-25.0],[31.5,-25.0],[116.0,-25.0],[122.5,-25.0],[129.0,-25.0],[135.5,-25.0],[142.0,-25.0],[148.5,-25.0],[294.0,-20.0],[300.5,-20.0],[307.0,-20.0],[313.5,-20.0],[18.5,-20.0],[25.0,-20.0],[31.5,-20.0],[122.5,-20.0],[129.0,-20.0],[135.5,-20.0],[142.0,-20.0],[294.0,-15.0],[300.5,-15.0],[307.0,-15.0],[313.5,-15.0],[320.0,-15.0],[18.5,-15.0],[25.0,-15.0],[31.5,-15.0],[38.0,-15.0],[129.0,-15.0],[135.5,-15.0],[287.5,-10.0],[294.0,-10.0],[300.5,-10.0],[307.0,-10.0],[313.5,-10.0],[320.0,-10.0],[18.5,-10.0],[25.0,-10.0],[31.5,-10.0],[38.0,-10.0],[281.0,-5.0],[287.5,-5.0],[294.0,-5.0],[300.5,-5.0],[307.0,-5.0],[313.5,-5.0],[320.0,-5.0],[12.0,-5.0],[18.5,-5.0],[25.0,-5.0],[31.5,-5.0],[38.0,-5.0],[281.0,0.0],[287.5,0.0],[294.0,0.0],[300.5,0.0],[307.0,0.0],[12.0,0.0],[18.5,0.0],[25.0,0.0],[31.5,0.0],[38.0,0.0],[44.5,0.0],[103.0,0.0],[116.0,0.0],[287.5,5.0],[294.0,5.0],[300.5,5.0],[5.5,5.0],[12.0,5.0],[18.5,5.0],[25.0,5.0],[31.5,5.0],[38.0,5.0],[44.5,5.0],[103.0,5.0],[116.0,5.0],[281.0,10.0],[-14.0,10.0],[-7.5,10.0],[-1.0,10.0],[5.5,10.0],[12.0,10.0],[18.5,10.0],[25.0,10.0],[31.5,10.0],[38.0,10.0],[44.5,10.0],[77.0,10.0],[103.0,10.0],[122.5,10.0],[268.0,15.0],[274.5,15.0],[-14.0,15.0],[-7.5,15.0],[-1.0,15.0],[5.5,15.0],[12.0,15.0],[18.5,15.0],[25.0,15.0],[31.5,15.0],[38.0,15.0],[77.0,15.0],[103.0,15.0],[122.5,15.0],[255.0,20.0],[261.5,20.0],[268.0,20.0],[274.5,20.0],[-14.0,20.0],[-7.5,20.0],[-1.0,20.0],[5.5,20.0],[12.0,20.0],[18.5,20.0],[25.0,20.0],[31.5,20.0],[38.0,20.0],[77.0,20.0],[83.5,20.0],[96.5,20.0],[103.0,20.0],[255.0,25.0],[261.5,25.0],[-7.5,25.0],[-1.0,25.0],[5.5,25.0],[12.0,25.0],[18.5,25.0],[25.0,25.0],[31.5,25.0],[64.0,25.0],[70.5,25.0],[77.0,25.0],[83.5,25.0],[90.0,25.0],[96.5,25.0],[103.0,25.0],[109.5,25.0],[116.0,25.0],[248.5,30.0],[255.0,30.0],[261.5,30.0],[268.0,30.0],[274.5,30.0],[-7.5,30.0],[-1.0,30.0],[5.5,30.0],[12.0,30.0],[18.5,30.0],[25.0,30.0],[31.5,30.0],[51.0,30.0],[57.5,30.0],[64.0,30.0],[70.5,30.0],[77.0,30.0],[83.5,30.0],[90.0,30.0],[96.5,30.0],[103.0,30.0],[109.5,30.0],[116.0,30.0],[242.0,35.0],[248.5,35.0],[255.0,35.0],[261.5,35.0],[268.0,35.0],[274.5,35.0],[281.0,35.0],[-7.5,35.0],[-1.0,35.0],[5.5,35.0],[12.0,35.0],[31.5,35.0],[38.0,35.0],[44.5,35.0],[51.0,35.0],[57.5,35.0],[64.0,35.0],[70.5,35.0],[77.0,35.0],[83.5,35.0],[90.0,35.0],[96.5,35.0],[103.0,35.0],[109.5,35.0],[116.0,35.0],[135.5,35.0],[242.0,40.0],[248.5,40.0],[255.0,40.0],[261.5,40.0],[268.0,40.0],[274.5,40.0],[281.0,40.0],[287.5,40.0],[-7.5,40.0],[-1.0,40.0],[18.5,40.0],[25.0,40.0],[31.5,40.0],[38.0,40.0],[44.5,40.0],[51.0,40.0],[57.5,40.0],[64.0,40.0],[70.5,40.0],[77.0,40.0],[83.5,40.0],[90.0,40.0],[96.5,40.0],[103.0,40.0],[109.5,40.0],[116.0,40.0],[122.5,40.0],[129.0,40.0],[242.0,45.0],[248.5,45.0],[255.0,45.0],[261.5,45.0],[268.0,45.0],[274.5,45.0],[281.0,45.0],[287.5,45.0],[294.0,45.0],[5.5,45.0],[12.0,45.0],[18.5,45.0],[25.0,45.0],[31.5,45.0],[38.0,45.0],[44.5,45.0],[51.0,45.0],[57.5,45.0],[64.0,45.0],[70.5,45.0],[77.0,45.0],[83.5,45.0],[90.0,45.0],[96.5,45.0],[103.0,45.0],[109.5,45.0],[116.0,45.0],[122.5,45.0],[129.0,45.0],[135.5,45.0],[235.5,50.0],[242.0,50.0],[248.5,50.0],[255.0,50.0],[261.5,50.0],[268.0,50.0],[274.5,50.0],[281.0,50.0],[287.5,50.0],[294.0,50.0],[300.5,50.0],[12.0,50.0],[18.5,50.0],[25.0,50.0],[31.5,50.0],[38.0,50.0],[44.5,50.0],[51.0,50.0],[57.5,50.0],[64.0,50.0],[70.5,50.0],[77.0,50.0],[83.5,50.0],[90.0,50.0],[96.5,50.0],[103.0,50.0],[109.5,50.0],[116.0,50.0],[122.5,50.0],[129.0,50.0],[135.5,50.0],[229.0,55.0],[235.5,55.0],[242.0,55.0],[248.5,55.0],[255.0,55.0],[261.5,55.0],[268.0,55.0],[274.5,55.0],[281.0,55.0],[287.5,55.0],[294.0,55.0],[300.5,55.0],[12.0,55.0],[18.5,55.0],[25.0,55.0],[31.5,55.0],[38.0,55.0],[44.5,55.0],[51.0,55.0],[57.5,55.0],[64.0,55.0],[70.5,55.0],[77.0,55.0],[83.5,55.0],[90.0,55.0],[96.5,55.0],[103.0,55.0],[109.5,55.0],[116.0,55.0],[122.5,55.0],[129.0,55.0],[135.5,55.0],[142.0,55.0],[148.5,55.0],[155.0,55.0],[203.0,60.0],[209.5,60.0],[216.0,60.0],[222.5,60.0],[229.0,60.0],[235.5,60.0],[242.0,60.0],[248.5,60.0],[255.0,60.0],[261.5,60.0],[268.0,60.0],[274.5,60.0],[281.0,60.0],[287.5,60.0],[294.0,60.0],[18.5,60.0],[25.0,60.0],[31.5,60.0],[38.0,60.0],[44.5,60.0],[51.0,60.0],[57.5,60.0],[64.0,60.0],[70.5,60.0],[77.0,60.0],[83.5,60.0],[90.0,60.0],[96.5,60.0],[103.0,60.0],[109.5,60.0],[116.0,60.0],[122.5,60.0],[129.0,60.0],[135.5,60.0],[142.0,60.0],[148.5,60.0],[155.0,60.0],[161.5,60.0],[196.5,65.0],[203.0,65.0],[209.5,65.0],[216.0,65.0],[222.5,65.0],[229.0,65.0],[235.5,65.0],[242.0,65.0],[248.5,65.0],[255.0,65.0],[261.5,65.0],[268.0,65.0],[274.5,65.0],[281.0,65.0],[25.0,65.0],[31.5,65.0],[38.0,65.0],[44.5,65.0],[51.0,65.0],[57.5,65.0],[64.0,65.0],[70.5,65.0],[77.0,65.0],[83.5,65.0],[90.0,65.0],[96.5,65.0],[103.0,65.0],[109.5,65.0],[116.0,65.0],[122.5,65.0],[129.0,65.0],[135.5,65.0],[142.0,65.0],[148.5,65.0],[155.0,65.0],[161.5,65.0],[114.2,22.3],[103.8,1.4],[139.7,35.7],[121.0,23.8],[238.1,37.3],[241.8,34.0]];
 
@@ -583,7 +516,9 @@
     // =========================================================================
     let userGeoOverrides = {};
     try {
-      userGeoOverrides = JSON.parse(localStorage.getItem('et_hub_geo_overrides') || '{}');
+      const parsed = JSON.parse(localStorage.getItem('et_hub_geo_overrides') || '{}');
+      // JSON.parse('null') 返回 null、数组也是对象，后续取值会抛错导致整页渲染挂掉。
+      userGeoOverrides = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
     } catch (e) {}
 
     function saveGeoOverrides() {
@@ -600,7 +535,8 @@
     }
 
     function isPrivateIp(ip) {
-      return /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(ip || '');
+      // 补 100.64/10（CGNAT，非公网）：之前会把运营商级 NAT 地址当成 WAN 显示。
+      return /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\.)/.test(ip || '');
     }
 
     // Only fields the report actually carries. conns[].remote_addr is NOT
@@ -610,10 +546,33 @@
       if (!ip || isPrivateIp(ip)) return '-';
       return ip;
     }
+    // IPv6 必须单独解析：extractCleanIp 只匹配 IPv4 正则，之前 actualWanIpv6
+    // 永远返回 ''，WAN IPv6 列实际从未显示过；::ffff: 映射地址也不算 IPv6。
+    function extractCleanIpv6(raw) {
+      if (!raw || raw === '-') return '';
+      let s = String(raw).trim().replace(/^\[|\]$/g, '').split('%')[0].split('/')[0];
+      if (!s.includes(':')) return '';
+      let host;
+      try { host = new URL(`http://[${s}]`).hostname.replace(/^\[|\]$/g, '').toLowerCase(); }
+      catch { return ''; }
+      if (!host.includes(':')) return '';
+      if (host === '::' || host === '::1') return '';
+      if (host.startsWith('::ffff:')) return '';
+      const first = parseInt(host.split(':')[0] || '0', 16);
+      if ((first & 0xffc0) === 0xfe80) return ''; // fe80::/10 链路本地
+      if ((first & 0xfe00) === 0xfc00) return ''; // fc00::/7 唯一本地
+      return host;
+    }
     function actualWanIpv6(peer) {
-      const ip = extractCleanIp(pick(peer, 'wan_ipv6'));
-      if (!ip || ip === '::1' || ip.toLowerCase().startsWith('fe80')) return '';
-      return ip;
+      return extractCleanIpv6(pick(peer, 'wan_ipv6'));
+    }
+    // 坐标守卫：null/''/布尔值经 Number() 都是 0 且 finite，之前会把清空过的标注
+    // 钉到 (0,0) 几内亚湾；同时校验范围，(0,0) 本身也不算有效坐标。
+    function toCoord(v, min, max) {
+      if (v === null || v === undefined || v === '' || typeof v === 'boolean') return NaN;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < min || n > max) return NaN;
+      return n;
     }
 
     function resolvePeerGeo(peer) {
@@ -622,21 +581,26 @@
       const cost = String(pick(peer, 'cost'));
       const proto = String(pick(peer, 'tunnel_proto'));
       const nat = natZh(pick(peer, 'nat_type'));
-      const override = userGeoOverrides[vip] || userGeoOverrides[host];
+      // '-' 是 pick 的缺省值，不是真实键：缺字段的节点共用 userGeoOverrides['-']，
+      // 一条标注会污染所有无名节点（包括中继），所以缺省键直接跳过查找。
+      const realKey = k => (k && k !== '-' ? k : null);
+      const override = (realKey(vip) && userGeoOverrides[vip]) || (realKey(host) && userGeoOverrides[host]) || null;
       const wanFromOverride = override?.wan_ip ? extractCleanIp(override.wan_ip) : '';
       const wanIp = (wanFromOverride && !isPrivateIp(wanFromOverride)) ? wanFromOverride : actualWanIp(peer);
       const wanIpv6 = actualWanIpv6(peer);
       const peerCountry = String(pick(peer, 'country') ?? '').trim();
 
-      if (override && Number.isFinite(Number(override.lat)) && Number.isFinite(Number(override.lon))) {
+      const oLat = override ? toCoord(override.lat, -90, 90) : NaN;
+      const oLon = override ? toCoord(override.lon, -180, 180) : NaN;
+      if (override && Number.isFinite(oLat) && Number.isFinite(oLon) && (oLat !== 0 || oLon !== 0)) {
         return {
           city: override.city || '', wanIp, wanIpv6, country: peerCountry,
-          lat: Number(override.lat), lon: Number(override.lon),
+          lat: oLat, lon: oLon,
           located: true, source: '手动标注'
         };
       }
-      const explicitLat = Number(peer.lat ?? peer.latitude ?? peer.geo?.lat);
-      const explicitLon = Number(peer.lon ?? peer.lng ?? peer.longitude ?? peer.geo?.lon);
+      const explicitLat = toCoord(peer.lat ?? peer.latitude ?? peer.geo?.lat, -90, 90);
+      const explicitLon = toCoord(peer.lon ?? peer.lng ?? peer.longitude ?? peer.geo?.lon ?? peer.geo?.lng, -180, 180);
       if (Number.isFinite(explicitLat) && Number.isFinite(explicitLon) && (explicitLat !== 0 || explicitLon !== 0)) {
         return {
           city: pick(peer, 'city', 'region') !== '-' ? pick(peer, 'city', 'region') : '',
@@ -646,7 +610,7 @@
         };
       }
       // 其它节点：用它自己上报时被 IP 反查到的地理（来自 buildGeoIndex 的汇总，不是按名字猜）
-      const known = geoIndex.get(host) || geoIndex.get(vip);
+      const known = (realKey(host) && geoIndex.get(host)) || (realKey(vip) && geoIndex.get(vip)) || null;
       if (known) {
         return {
           city: known.city || '',           wanIp: wanIp !== '-' ? wanIp : (known.wanIp || '-'),
@@ -678,8 +642,7 @@
       search: '',
       sortCol: 'lat_ms',
       sortAsc: true,
-      viewMode: 'table',
-      countdown: 10,
+      sortTouched: false,
       currentPeers: [],
       filteredPeers: [],
       selectedPeerRaw: null,
@@ -687,7 +650,13 @@
       mapZoom: 1.0,
       mapPanX: 0,
       mapPanY: 0,
-      mapCollapsed: false
+      mapCollapsed: false,
+      historyBuckets: null,
+      historyAt: 0,
+      sessionSeries: { lat: [], conn: [], nodes: [], traffic: [] },
+      prevTraffic: null,
+      eventsManuallyCollapsed: false,
+      lastAutoExpandedEventId: null
     };
 
     function formatBytes(val) {
@@ -771,13 +740,9 @@
     function showToast(msg) {
       const t = $('toast');
       $('toastText').textContent = msg;
-      t.classList.remove('hidden');
-      t.classList.add('flex');
-      clearTimeout(showToast._timer);
-      showToast._timer = setTimeout(() => {
-        t.classList.add('hidden');
-        t.classList.remove('flex');
-      }, 2200);
+      t.hidden = false;
+      clearTimeout(t._timer);
+      t._timer = setTimeout(() => { t.hidden = true; }, 2600);
     }
 
     function copyText(text, label = '已复制到剪贴板') {
@@ -799,16 +764,46 @@
       document.body.removeChild(ta);
     }
 
+    // 严重度：bad = 延迟 >300ms 或丢包 >5%；warn = 延迟 >150ms 或丢包 >1% 或走中继；其余 ok
+    function peerSeverity(peer) {
+      const lat = parseNumericLatency(pick(peer, 'lat_ms'));
+      const loss = parseNumericLoss(pick(peer, 'loss_rate'));
+      if (lat >= 300 || loss >= 5) return 'bad';
+      if (lat >= 150 || loss >= 1) return 'warn';
+      if (classifyConn(pick(peer, 'cost'), peer) === 'relay') return 'warn';
+      return 'ok';
+    }
+    function peerBadLabel(peer) {
+      const lat = parseNumericLatency(pick(peer, 'lat_ms'));
+      const loss = parseNumericLoss(pick(peer, 'loss_rate'));
+      if (lat >= 300) return `延迟 ${pick(peer, 'lat_ms')} ms`;
+      if (loss >= 5) return `丢包 ${pick(peer, 'loss_rate')}`;
+      if (classifyConn(pick(peer, 'cost'), peer) === 'relay') return '中继';
+      if (lat >= 150) return `延迟 ${pick(peer, 'lat_ms')} ms`;
+      return '需关注';
+    }
+    function setHealth(state, text, chips) {
+      const bar = $('healthBar'); if (!bar) return;
+      bar.dataset.state = state;
+      $('healthDot').dataset.state = state === 'ok' ? 'ok' : state;
+      $('healthText').textContent = text;
+      $('healthChips').innerHTML = (chips || []).map(c =>
+        `<button type="button" class="health-chip" data-state="${state}" data-peer-idx="${c.idx}">${esc(c.label)}</button>`).join('');
+      document.querySelectorAll('#healthChips .health-chip').forEach(b => {
+        b.addEventListener('click', () => {
+          const row = document.querySelector(`tr[data-peer-idx="${b.dataset.peerIdx}"]`);
+          if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+      });
+    }
     function setLiveStatus(ok, msg) {
       const dot = $('modeDot');
       const label = $('modeLabel');
-      if (ok) {
-        dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
-        label.textContent = '实时 API';
-      } else {
-        dot.className = 'w-2 h-2 rounded-full bg-rose-500';
-        label.textContent = msg || '实时接口失败';
-      }
+      const pill = $('modePill');
+      dot.dataset.state = ok ? 'ok' : 'bad';
+      dot.className = 'dot';
+      label.textContent = msg || (ok ? '实时' : '连接失败');
+      if (pill) pill.dataset.state = ok ? 'ok' : 'bad';
     }
 
 
@@ -947,9 +942,16 @@
       };
     }
 
-    function projectLonLat(lon, lat, bounds) {
+    // 视口经度与投影经度必须统一：getMapViewportBounds 用圆均值算中心，
+    // bounds 可能是 218–392 这种超 180 的区间；只做 toPacLon 会让欧洲节点（8°）
+    // 落在 bounds 外、出画。先按视口中心归一到 ±180° 内，轮廓/点阵/节点走同一函数。
+    function normLon(lon, bounds) {
       const pacLon = toPacLon(lon);
-      const x = ((pacLon - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * SVG_W;
+      const center = (bounds.minLon + bounds.maxLon) / 2;
+      return pacLon + 360 * Math.round((center - pacLon) / 360);
+    }
+    function projectLonLat(lon, lat, bounds) {
+      const x = ((normLon(lon, bounds) - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * SVG_W;
       const y = ((bounds.maxLat - lat) / (bounds.maxLat - bounds.minLat)) * SVG_H;
       return { x, y };
     }
@@ -1097,7 +1099,7 @@
       const pushDots = (arr, r, opacity) => {
         for (let i = 0; i < arr.length; i++) {
           const pt = arr[i];
-          const x = ((pt[0] - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * SVG_W;
+          const x = ((normLon(pt[0], bounds) - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * SVG_W;
           const y = ((bounds.maxLat - pt[1]) / (bounds.maxLat - bounds.minLat)) * SVG_H;
           if (x >= -10 && x <= SVG_W + 10 && y >= -10 && y <= SVG_H + 10) {
             landDotsHtml.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r}" fill="var(--map-dot-land)" fill-opacity="${opacity}" />`);
@@ -1193,16 +1195,24 @@
       const uw = $('unlocatedWrap');
       if (uw) {
         if (state.unlocatedPeers && state.unlocatedPeers.length) {
-          uw.classList.remove('hidden');
+          uw.hidden = false;
           $('unlocatedList').innerHTML = state.unlocatedPeers.map(p => {
             const g = resolvePeerGeo(p);
             const relay = relayDisplay(p);
             const host = relay ? relay.hostname : pick(p, 'hostname');
             const ip = relay ? '-' : pick(p, 'ipv4', 'virtual_ipv4');
-            return `${esc(host)} (${esc(ip)} · WAN ${esc(g.wanIp)}${g.wanIpv6 ? ' / ' + esc(g.wanIpv6) : ''}${g.city ? ' · ' + esc(g.city) : ''})`;
-          }).join('、');
+            return `<button type="button" class="chip" data-unlocated-ip="${esc(ip)}" title="点击定位到节点行">${esc(host)} (${esc(ip)})</button>`;
+          }).join(' ');
+          $('unlocatedList').querySelectorAll('[data-unlocated-ip]').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const row = document.querySelector(`tr[data-peer-idx] .node-ip`);
+              const rows = [...document.querySelectorAll('tr.peer-row')];
+              const target = rows.find(r => r.textContent.includes(btn.dataset.unlocatedIp));
+              if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+          });
         } else {
-          uw.classList.add('hidden');
+          uw.hidden = true;
         }
       }
 
@@ -1274,30 +1284,135 @@
       }
     }
 
+    // sparkline：内联 SVG，null 断开（缺失数据不连成假趋势）；颜色继承 currentColor。
+    function sparkSvg(vals, w, h, max) {
+      const ok = vals.filter(v => v != null);
+      if (!ok.length) return '';
+      const m = max ?? (Math.max(...ok) * 1.15 || 1);
+      const step = w / (vals.length - 1 || 1);
+      let d = '', pen = false;
+      vals.forEach((v, i) => {
+        if (v == null) { pen = false; return; }
+        d += (pen ? 'L' : 'M') + (i * step).toFixed(1) + ' ' + (h - v / m * h).toFixed(1);
+        pen = true;
+      });
+      return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="spark"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+    }
+    // 24h 状态条：相邻同状态合并，避免 96 段 × N 节点堆几千个 DOM 节点。
+    function statusBarHtml(statuses) {
+      if (!statuses.length) return '';
+      const runs = [];
+      for (const s of statuses) {
+        const last = runs[runs.length - 1];
+        if (last && last.s === s) last.n++;
+        else runs.push({ s, n: 1 });
+      }
+      const total = statuses.length;
+      return `<div class="status-bar" role="img" aria-label="24 小时状态">${runs.map(r => {
+        const c = r.s === 'ok' ? 'var(--ok)' : r.s === 'warn' ? 'var(--warn)' : r.s === 'bad' ? 'var(--bad)' : 'var(--nodata)';
+        return `<div style="flex:${r.n};background:${c}" title="${r.s}"></div>`;
+      }).join('')}</div>`;
+    }
+    // 某节点的历史桶序列（按 ip 匹配；历史里没有丢包，只有延迟和在线状态）
+    function nodeHistSeries(ip) {
+      const buckets = state.historyBuckets || [];
+      if (!buckets.length) return { lat: [], status: [] };
+      const lat = [], status = [];
+      for (const b of buckets) {
+        const n = b.nodes ? b.nodes[ip] : null;
+        if (!n || !n.total) { lat.push(null); status.push('nodata'); continue; }
+        lat.push(n.lat);
+        const ratio = n.samples / n.total;
+        status.push(ratio >= 0.9 ? 'ok' : ratio > 0 ? 'warn' : 'bad');
+      }
+      return { lat, status };
+    }
+    function updateKpiSparklines() {
+      const buckets = state.historyBuckets || [];
+      const setSpark = (id, vals, color) => {
+        const el = $(id); if (!el) return;
+        el.style.color = color;
+        el.innerHTML = sparkSvg(vals, 240, 28);
+      };
+      if (buckets.length) {
+        const latSeries = buckets.map(b => {
+          const vals = Object.values(b.nodes || {}).map(n => n.lat).filter(v => v != null);
+          return vals.length ? vals.reduce((a, c) => a + c, 0) / vals.length : null;
+        });
+        const nodeSeries = buckets.map(b => {
+          const keys = Object.keys(b.nodes || {});
+          return keys.length ? keys.filter(k => (b.nodes[k].samples || 0) > 0).length : null;
+        });
+        setSpark('sparkLat', latSeries, 'var(--ok)');
+        setSpark('sparkNodes', nodeSeries, 'var(--accent)');
+        setSpark('sparkConn', state.sessionSeries.conn, 'var(--accent)');
+        setSpark('sparkTraffic', state.sessionSeries.traffic, 'var(--accent)');
+      } else {
+        setSpark('sparkLat', state.sessionSeries.lat, 'var(--ok)');
+        setSpark('sparkNodes', state.sessionSeries.nodes, 'var(--accent)');
+        setSpark('sparkConn', state.sessionSeries.conn, 'var(--accent)');
+        setSpark('sparkTraffic', state.sessionSeries.traffic, 'var(--accent)');
+      }
+      // 全网 24h 状态条：每桶在线节点数 / 当前节点数
+      const bar = $('globalStatusBar'), avail = $('globalAvail');
+      if (buckets.length && state.currentPeers.length) {
+        const curIps = new Set(state.currentPeers.map(pp => String(pick(pp, 'ipv4', 'virtual_ipv4'))));
+        const statuses = buckets.map(b => {
+          const online = [...curIps].filter(ip => (b.nodes || {})[ip] && b.nodes[ip].samples > 0).length;
+          const ratio = curIps.size ? online / curIps.size : 0;
+          return ratio >= 0.9 ? 'ok' : ratio > 0 ? 'warn' : 'bad';
+        });
+        bar.innerHTML = statusBarHtml(statuses);
+        bar.hidden = false;
+        const okRatio = statuses.length ? statuses.filter(s => s === 'ok').length / statuses.length : 0;
+        avail.textContent = `24h 可用率 ${Math.round(okRatio * 100)}%（按当前节点在各桶是否在线算）`;
+        avail.hidden = false;
+      } else {
+        bar.hidden = true; avail.hidden = true;
+      }
+    }
+    async function fetchHistoryBuckets(force) {
+      const now = Date.now();
+      if (!force && state.historyAt && now - state.historyAt < 5 * 60 * 1000) return;
+      const reporter = state.selectedReporter && state.selectedReporter !== '__latest__'
+        ? state.selectedReporter
+        : (state.payload.reporters || [])[0]?.reporter;
+      if (!reporter) return;
+      try {
+        const r = await fetch(`/api/history?reporter=${encodeURIComponent(reporter)}&window=24h&bucket=15m`, { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j && Array.isArray(j.buckets)) {
+          state.historyBuckets = j.buckets;
+          state.historyAt = now;
+          updateKpiSparklines();
+          renderPeersList();
+        }
+      } catch (e) {}
+    }
+
     function renderDashboardInner() {
       const j = state.payload;
       if (!j) return;
 
       const reporters = (j.reporters || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0));
-      $('reporterCount').textContent = reporters.length;
       buildGeoIndex(j);
 
       if (!reporters.length) {
-        $('src').textContent = '暂无上报';
-        $('age').textContent = '等待节点上报';
-        $('age').className = 'text-xs font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500';
+        setHealth('bad', '暂无上报', []);
+        setLiveStatus(false, '暂无上报');
         // Relay health comes from /relay itself, not from a reporter snapshot,
         // so it stays visible even when no node has reported yet.
         const rh = state.relayHealth || {};
-        $('relay').textContent = rh.ok ? (rh.state || 'running') : '-';
-        $('conn').textContent = rh.ok ? `${rh.connections ?? 0} 条 wss 连接` : '—';
+        $('relay').textContent = rh.ok ? '中继在线' : '—';
+        $('conn').textContent = rh.ok ? (rh.connections ?? 0) : '—';
         $('count').textContent = '0';
         $('rows').innerHTML = '';
         $('cardsViewWrap').innerHTML = '';
         state.currentPeers = [];
         state.unlocatedPeers = [];
         renderSvgGeoMap();
-        $('emptyState').classList.remove('hidden');
+        $('emptyState').hidden = false;
         return;
       }
 
@@ -1308,27 +1423,25 @@
 
       const nowTs = j.now || Date.now();
       const age = Math.max(0, Math.round((nowTs - cur.at) / 1000));
-      $('src').textContent = cur.reporter || '-';
-      $('age').textContent = age > 180 ? `数据已过期 (${age}s)` : `${age}s 前更新`;
-      $('age').className = age > 180
-        ? 'text-xs font-medium px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0 warn'
-        : 'text-xs font-medium px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0';
-
-      const syncDate = new Date(cur.at || nowTs);
-      $('lastSyncTime').textContent = syncDate.toLocaleTimeString('zh-CN', { hour12: false });
+      // 新鲜度只进 header pill 与健康条，不再单独占一张 KPI 卡
+      setLiveStatus(true, age > 180 ? `数据过期 ${age}s` : `${age}s 前更新`);
+      $('healthTime').textContent = new Date(cur.at || nowTs).toLocaleTimeString('zh-CN', { hour12: false });
+      $('healthTime').dataset.state = age > 180 ? 'warn' : 'ok';
+      $('footerTime').textContent = `更新于 ${new Date(cur.at || nowTs).toLocaleTimeString('zh-CN', { hour12: false })} · 上报源 ${reporters.length} 个 · ${cur.reporter || '-'}`;
 
       const h = state.relayHealth || cur.relay || {};
       const relayOk = Boolean(h.ok);
-      $('relay').textContent = relayOk ? (h.state || 'running') : 'down';
-      $('relay').className = `text-2xl font-bold tracking-tight ${relayOk ? 'text-emerald-600 dark:text-emerald-400 ok' : 'text-rose-600 dark:text-rose-400 bad'}`;
-      $('relayDot').className = relayOk
-        ? 'relative w-2.5 h-2.5 rounded-full bg-emerald-500 status-dot-pulse'
-        : 'relative w-2.5 h-2.5 rounded-full bg-rose-500';
-      $('conn').textContent = relayOk ? `${h.connections ?? 0} 条 wss 连接` : '连接中断';
+      $('conn').textContent = relayOk ? (h.connections ?? 0) : '—';
+      $('conn').parentElement.dataset.state = relayOk ? 'ok' : 'bad';
+      $('relay').textContent = relayOk ? '中继在线' : '中继离线';
+      $('relayDot').dataset.state = relayOk ? 'ok' : 'bad';
+      $('relayDot').className = 'dot';
+      if (!relayOk) $('relayDot').classList.add('pulse');
 
       const peers = list(cur.data?.peers).filter(p => !isRelayPeer(p));
       state.currentPeers = peers;
       $('count').textContent = peers.length;
+      $('countTotal').textContent = '';
 
       let p2pCount = 0, relayCount = 0, localCount = 0;
       let latSum = 0, latValidCount = 0;
@@ -1365,15 +1478,44 @@
       $('barRelay').style.width = `${(relayCount / total) * 100}%`;
       $('barLocal').style.width = `${(localCount / total) * 100}%`;
 
-      $('avgLat').textContent = latValidCount ? (latSum / latValidCount).toFixed(1) : '-';
-      const avgLossVal = lossValidCount ? (lossSum / lossValidCount).toFixed(1) : '0.0';
-      $('avgLoss').textContent = `丢包 ${avgLossVal}%`;
-      $('totalTraffic').textContent = `${formatBytes(totalRx)} / ${formatBytes(totalTx)}`;
+      const avgLatVal = latValidCount ? (latSum / latValidCount) : NaN;
+      $('avgLat').textContent = latValidCount ? avgLatVal.toFixed(1) : '—';
+      $('avgLatWrap').dataset.state = !latValidCount ? 'ok' : (avgLatVal > 300 ? 'bad' : (avgLatVal > 150 ? 'warn' : 'ok'));
+      const avgLossVal = lossValidCount ? (lossSum / lossValidCount) : 0;
+      $('avgLoss').textContent = `丢包 ${avgLossVal.toFixed(1)}%`;
+      $('totalTraffic').textContent = `收 ${formatBytes(totalRx)} · 发 ${formatBytes(totalTx)}`;
+      $('trafficTotal').textContent = `收 ${formatBytes(totalRx)} · 发 ${formatBytes(totalTx)}`;
+      // 流量速率：两次轮询间累计收发差值 / 时间间隔；计数器重置（差值为负）时跳过这一次。
+      const atMs = cur.at || nowTs;
+      if (state.prevTraffic && atMs > state.prevTraffic.at) {
+        const dt = (atMs - state.prevTraffic.at) / 1000;
+        const dRx = totalRx - state.prevTraffic.rx, dTx = totalTx - state.prevTraffic.tx;
+        if (dt > 0 && dRx >= 0 && dTx >= 0) {
+          $('trafficRate').textContent = `${formatBytes(dRx / dt)}/s`;
+          $('trafficRateSub').textContent = `↓ ${formatBytes(dRx / dt)}/s · ↑ ${formatBytes(dTx / dt)}/s`;
+          state.sessionSeries.traffic.push((dRx + dTx) / dt);
+        }
+      }
+      state.prevTraffic = { rx: totalRx, tx: totalTx, at: atMs };
+      // 会话内 sparkline（历史未加载前用，180 点约 90 分钟；历史加载后 KPI 改用 24h 桶序列）
+      const push = (arr, v) => { arr.push(v); if (arr.length > 180) arr.shift(); };
+      push(state.sessionSeries.lat, Number.isFinite(avgLatVal) ? avgLatVal : null);
+      push(state.sessionSeries.nodes, peers.length);
+      push(state.sessionSeries.conn, relayOk ? (h.connections ?? 0) : null);
+      updateKpiSparklines();
 
       $('tabCountAll').textContent = peers.length;
       $('tabCountP2p').textContent = p2pCount;
       $('tabCountRelay').textContent = relayCount;
-      $('tabCountLocal').textContent = localCount;
+      $('tabCountBad').textContent = peers.filter(p => peerSeverity(p) === 'bad').length;
+      // 健康条：异常节点点名（离线不在快照里，故只点名延迟/丢包异常 + 中继异常）
+      const badPeers = peers.filter(p => peerSeverity(p) === 'bad');
+      const warnPeers = peers.filter(p => peerSeverity(p) === 'warn');
+      if (!peers.length) setHealth('bad', '暂无节点', []);
+      else if (badPeers.length) setHealth('bad', `${badPeers.length} 个节点异常`, badPeers.slice(0, 4).map(p => ({ label: `${pick(p, 'hostname')} ${peerBadLabel(p)}`, idx: peers.indexOf(p) })));
+      else if (warnPeers.length) setHealth('warn', `${warnPeers.length} 个节点需关注`, warnPeers.slice(0, 4).map(p => ({ label: `${pick(p, 'hostname')} ${peerBadLabel(p)}`, idx: peers.indexOf(p) })));
+      else if (!relayOk) setHealth('bad', '中继离线', []);
+      else setHealth('ok', `全部正常 · ${peers.length}/${peers.length} 在线`, []);
 
       renderSvgGeoMap();
       renderPeersList();
@@ -1393,84 +1535,55 @@
       'de': { name: 'h2.nexus', url: 'https://h2.nexus/', mark: '<svg viewBox="0 0 200 64" xmlns="http://www.w3.org/2000/svg"><text x="0" y="50" font-family="Arial,sans-serif" font-size="46" font-weight="900" fill="#7beb53">h2</text><circle cx="64" cy="44" r="7" fill="#7c5cff"/><text x="78" y="46" font-family="Arial,sans-serif" font-size="21" font-weight="600" fill="#7beb53">nexus</text></svg>' },
       'fr': { name: 'BitsFlow Cloud', url: 'https://bitsflow.cloud/', mark: '<svg viewBox="0 0 200 64" xmlns="http://www.w3.org/2000/svg"><g transform="translate(4 10) scale(1.35)"><rect x="0" y="4" width="20" height="6" rx="1" fill="#4B6BDB"/><rect x="6" y="13" width="20" height="6" rx="1" fill="#E70012"/><rect x="12" y="22" width="20" height="6" rx="1" fill="#F9D73F"/></g><text x="48" y="40" font-family="Arial,sans-serif" font-size="21" font-weight="800" fill="#4B6BDB">BitsFlow</text></svg>' },
     };
-    function providerFor(host) { return PROVIDER_MAP[String(host ?? '').trim()] || null; }
+    // 普通对象查表会命中原型：hostname 为 constructor 等时返回函数，pv.mark.replace 会抛错。
+    function providerFor(host) {
+      const key = String(host ?? '').trim();
+      return Object.prototype.hasOwnProperty.call(PROVIDER_MAP, key) ? PROVIDER_MAP[key] : null;
+    }
 
     function peerRowHtml(d) {
-        const { idx, ip, host, geo, cost, latRaw, latNum, lossRaw, lossColor, rx, tx, proto, nat, badgeClass, latColor } = d;
-
-        return `<tr data-peer-idx="${idx}" class="peer-row group hover:bg-slate-50/90 dark:hover:bg-slate-800/40 transition-colors cursor-pointer">
-          <td class="py-3.5 px-4 sm:px-6 whitespace-nowrap">
-            <div class="inline-flex items-center gap-2">
-              <span class="font-mono-num font-medium text-slate-900 dark:text-slate-100">${esc(ip)}</span>
-              <button type="button" data-copy-ip="${esc(ip)}" class="copy-ip-btn opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-opacity" title="复制虚拟 IP">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            </div>
+        const { idx, ip, host, geo, cost, latRaw, latNum, lossRaw, lossNum, lossColor, rx, tx, proto, nat, badgeClass, latColor } = d;
+        const sev = d.severity || 'ok';
+        const linkZh = cost === 'Local' ? '本机' : (String(cost).toLowerCase().includes('relay') || d.kind === 'relay' ? '中继' : '直连');
+        return `<tr data-peer-idx="${idx}" class="peer-row" data-state="${sev}">
+          <td style="position:sticky;left:0;background:var(--surface)">
+            <div class="node-name">${esc(host)}</div>
+            <div class="node-ip">${esc(ip)}</div>
           </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-medium text-slate-800 dark:text-slate-200">
-            ${esc(host)}
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap">
-            <div class="font-mono-num text-xs text-slate-700 dark:text-slate-300">${esc(geo.wanIp)}</div>
-            ${geo.wanIpv6 ? `<div class="font-mono-num text-[11px] text-slate-500 dark:text-slate-400 break-all">${esc(geo.wanIpv6)}</div>` : ''}
-            <div class="text-[11px] text-slate-500 dark:text-slate-400">${esc(cityZh(geo.city) || '-')}</div>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap">
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeClass}">
-              <span class="w-1.5 h-1.5 rounded-full bg-current"></span>
-              ${esc(cost)}
-            </span>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${latColor}">
-            ${(latRaw === '-' || (latNum < 1 && latNum < 999999)) ? '-' : `${esc(latRaw)}`}
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num ${lossColor}">
-            ${esc(String(lossRaw).includes('%') || lossRaw === '-' ? lossRaw : `${lossRaw}%`)}
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap font-mono-num text-xs text-slate-600 dark:text-slate-300">
-            <span class="text-emerald-600 dark:text-emerald-400">${esc(rx)}</span>
-            <span class="mx-1 text-slate-300 dark:text-slate-600">/</span>
-            <span class="text-indigo-600 dark:text-indigo-400">${esc(tx)}</span>
-          </td>
-          <td class="py-3.5 px-4 whitespace-nowrap">
-            <span class="px-2 py-0.5 rounded-md text-xs font-mono bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60">
-              ${esc(proto)}
-            </span>
-          </td>
-          <td class="py-3.5 px-4 sm:pr-6 whitespace-nowrap text-xs font-mono text-slate-600 dark:text-slate-400">
-            ${esc(nat)}
-          </td>
+          <td><span class="link-chip" data-state="${sev === 'bad' ? 'warn' : 'ok'}">${esc(linkZh)} · <span class="mono">${esc(proto)}</span></span></td>
+          <td class="num-col num" data-state="${latNum >= 300 ? 'bad' : (latNum >= 150 ? 'warn' : 'ok')}">${(latRaw === '-' || (latNum < 1 && latNum < 999999)) ? '—' : `${esc(latRaw)}`}<span style="display:inline-block;width:64px;height:16px;color:var(--muted-2);vertical-align:middle;margin-left:6px">${sparkSvg(nodeHistSeries(ip).lat, 64, 16)}</span></td>
+          <td class="num-col num" data-state="${lossNum >= 5 ? 'bad' : (lossNum >= 1 ? 'warn' : 'ok')}">${esc(String(lossRaw).includes('%') || lossRaw === '-' ? lossRaw : `${lossRaw}%`)}</td>
+          <td class="num-col num">↓${esc(rx)} ↑${esc(tx)}</td>
+          <td class="muted" style="font-size:12px">${esc(cityZh(geo.city) || '-')} · ${esc(geo.wanIp)} · ${esc(nat)}</td>
         </tr>`;
-      
     }
 
     function peerCardHtml(d) {
-        const { idx, ip, host, geo, cityTxt, cost, badgeClass, latTxt, latColor, lossRaw, lossNum, proto, pv } = d;
-
-        return `<div data-peer-idx="${idx}" class="peer-card group relative overflow-hidden rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:border-indigo-500/50 transition-colors cursor-pointer min-h-[124px]">
-          <!-- 国旗铺满整张卡片做背景 -->
-          ${flagLayer(geo.country)}
-          <!-- 左侧渐变蒙层：保证文字在国旗上也清晰 -->
-          <div class="absolute inset-0 pointer-events-none bg-gradient-to-r from-white/[0.97] via-white/[0.90] to-white/[0.42] dark:from-[#0b1220]/[0.97] dark:via-[#0b1220]/[0.90] dark:to-[#0b1220]/[0.42]"></div>
-          <div class="relative p-3.5 space-y-2">
-            <div class="flex items-center justify-between gap-2">
-              <div class="h-[22px] w-[104px] shrink-0">${pv ? pv.mark.replace('<svg ', '<svg class="w-full h-full" ') : ''}</div>
-              <span class="shrink-0 px-2 py-0.5 rounded-md text-[11px] font-medium border ${badgeClass}">${esc(cost)}</span>
-            </div>
-            <div class="min-w-0">
-              <div class="font-semibold text-[13px] text-slate-900 dark:text-white truncate">${esc(host)}</div>
-              <div class="text-[11px] text-slate-700 dark:text-slate-200 truncate">${esc(cityTxt || '-')} · <span class="font-mono-num">${esc(ip)}</span></div>
-            </div>
-            <div class="flex items-center gap-3 text-[11px]">
-              <span class="font-mono-num ${latColor}">${latTxt}</span>
-              <span class="font-mono-num ${lossNum > 0 ? 'text-rose-600 dark:text-rose-400 font-semibold' : 'text-slate-700 dark:text-slate-200'}">丢包 ${esc(lossRaw)}</span>
-              <span class="font-mono text-slate-600 dark:text-slate-300">${esc(proto)}</span>
-            </div>
+        const { idx, ip, host, geo, cityTxt, cost, latTxt, latColor, lossRaw, lossNum, proto, pv, severity } = d;
+        const linkZh = cost === 'Local' ? '本机' : (d.kind === 'relay' ? '中继' : '直连');
+        const latState = d.latNum >= 300 ? 'bad' : (d.latNum >= 150 ? 'warn' : 'ok');
+        const lossState = lossNum >= 5 ? 'bad' : (lossNum >= 1 ? 'warn' : 'ok');
+        return `<div data-peer-idx="${idx}" class="peer-card" data-state="${severity}">
+          <div class="row-id">
+            <span style="display:flex;align-items:center;gap:8px;min-width:0">
+              <span class="dot" data-state="${severity === 'ok' ? 'ok' : severity}"></span>
+              <span class="node-name truncate">${esc(host)}</span>
+            </span>
+            <span class="link-chip">${esc(linkZh)}</span>
+          </div>
+          <div class="row-metrics">
+            <span class="metric" data-state="${latState}">${esc(latTxt)}<span class="unit">ms</span></span>
+            <span class="metric" data-state="${lossState}" style="font-size:14px">丢包 ${esc(lossRaw)}</span>
+            <span style="font-size:14px">↓${esc(d.rx)} ↑${esc(d.tx)}</span>
+          </div>
+          <div style="color:var(--muted-2)">${sparkSvg(nodeHistSeries(ip).lat, 240, 24)}</div>
+          ${statusBarHtml(nodeHistSeries(ip).status)}
+          <div class="row-meta">
+            <span class="mono">${esc(ip)}</span>
+            <span>${esc(cityTxt || '-')}</span>
+            ${pv ? `<span class="provider-mark">${pv.mark.replace('<svg ', '<svg ')}</span>` : ''}
           </div>
         </div>`;
-      
     }
 
     // 表格与卡片原来各写一份 60 行派生逻辑，已经漂移过（badge 分支不一致）。
@@ -1491,26 +1604,16 @@
       const tx = formatBytes(pick(p, 'tx_bytes'));
       const proto = pick(p, 'tunnel_proto');
       const nat = natZh(pick(p, 'nat_type'));
-      const badgeClass = kind === 'p2p'
-        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 ok'
-        : kind === 'relay'
-        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 warn'
-        : kind === 'local'
-        ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20'
-        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700';
-      const latColor = latNum >= 999999 ? 'text-slate-400'
-        : latNum < 200 ? 'text-emerald-600 dark:text-emerald-400'
-        : latNum < 300 ? 'text-amber-600 dark:text-amber-400'
-        : 'text-rose-600 dark:text-rose-400';
-      const lossColor = lossNum > 0
-        ? 'text-rose-600 dark:text-rose-400 font-semibold'
-        : 'text-slate-600 dark:text-slate-400';
+      const badgeClass = '';
+      const latColor = '';
+      const lossColor = '';
       const latTxt = (latRaw === '-' || latNum >= 999999) ? '—' : `${latRaw} ms`;
       return {
         p, idx, relay, ip, host, geo, cityTxt, cost, kind,
         latRaw, latNum, latTxt, lossRaw, lossNum, rx, tx, proto, nat,
         badgeClass, latColor, lossColor,
         pv: providerFor(host),
+        severity: peerSeverity(p),
       };
     }
 
@@ -1520,7 +1623,9 @@
 
       const filtered = peers.filter((p, idx) => {
         const kind = classifyConn(pick(p, 'cost'), p);
-        if (state.filter !== 'all' && kind !== state.filter) return false;
+        if (state.filter === 'bad' && peerSeverity(p) !== 'bad') return false;
+        if (state.filter === 'relay' && kind !== 'relay') return false;
+        if (state.filter === 'p2p' && kind !== 'p2p') return false;
         if (!q) return true;
         const geo = resolvePeerGeo(p);
         const ip = String(pick(p, 'ipv4', 'virtual_ipv4')).toLowerCase();
@@ -1536,6 +1641,13 @@
       const col = state.sortCol;
       const dir = state.sortAsc ? 1 : -1;
       filtered.sort((a, b) => {
+        // 默认按严重度排序：异常在前，同级按延迟降序；用户点表头后改用表头排序
+        if (!state.sortTouched) {
+          const rank = s => s === 'bad' ? 0 : s === 'warn' ? 1 : 2;
+          const ra = rank(peerSeverity(a)), rb = rank(peerSeverity(b));
+          if (ra !== rb) return ra - rb;
+          return parseNumericLatency(pick(b, 'lat_ms')) - parseNumericLatency(pick(a, 'lat_ms'));
+        }
         const isLocalCost = v => String(pick(v, 'cost')).trim().toLowerCase() === 'local';
         const aLocal = isLocalCost(a);
         const bLocal = isLocalCost(b);
@@ -1564,32 +1676,26 @@
         th.setAttribute('aria-sort', active ? (state.sortAsc ? 'ascending' : 'descending') : 'none');
       });
       document.querySelectorAll('.sort-indicator').forEach(el => {
-        if (el.dataset.col === state.sortCol) {
+        if (el.dataset.col === state.sortCol && state.sortTouched) {
           el.textContent = state.sortAsc ? '↑' : '↓';
-          el.className = 'sort-indicator text-indigo-500 font-bold';
         } else {
           el.textContent = '';
-          el.className = 'sort-indicator';
         }
       });
 
       if (!filtered.length) {
         $('rows').innerHTML = '';
         $('cardsViewWrap').innerHTML = '';
-        $('emptyState').classList.remove('hidden');
+        $('emptyState').hidden = false;
         return;
       }
-      $('emptyState').classList.add('hidden');
+      $('emptyState').hidden = true;
 
       const derived = filtered.map((p, idx) => deriveRow(p, idx));
 
-      const rowsHtml = derived.map(peerRowHtml).join('');
-
-      const cardsHtml = derived.map(peerCardHtml).join('');
-
-      const showCards = state.viewMode === 'cards';
-      $('rows').innerHTML = showCards ? '' : rowsHtml;
-      $('cardsViewWrap').innerHTML = showCards ? cardsHtml : '';
+      $('rows').innerHTML = derived.map(peerRowHtml).join('');
+      $('cardsViewWrap').innerHTML = derived.map(peerCardHtml).join('');
+      // 视图按宽度自动切换：≥768px 表格，<768px 卡片（CSS 控制显示，JS 两份都渲染）
       state.filteredPeers = filtered;
     }
 
@@ -1600,7 +1706,8 @@
       const ip = relay ? '-' : pick(peer, 'ipv4', 'virtual_ipv4');
       const host = relay ? relay.hostname : pick(peer, 'hostname');
       const geo = resolvePeerGeo(peer);
-      $('modalPeerTitle').textContent = relay ? '中继' : `${host} (${ip})`;
+      $('modalPeerTitle').textContent = relay ? '中继' : `${host} · ${ip}`;
+      const sevEl = $('modalPeerDot'); if (sevEl) sevEl.dataset.state = peerSeverity(peer);
       const fields = [
         ['虚拟 IP (ipv4)', ip],
         ['主机名 (hostname)', host],
@@ -1615,14 +1722,10 @@
         ['版本 (version)', pick(peer, 'version')]
       ];
       $('modalPeerGrid').innerHTML = fields.map(([k, v]) => `
-        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800">
-          <div class="text-[11px] text-slate-400">${esc(k)}</div>
-          <div class="font-mono-num font-medium text-slate-800 dark:text-slate-100 mt-0.5 truncate">${esc(v)}</div>
-        </div>
+        <div class="kv"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>
       `).join('');
       $('modalPeerRaw').textContent = JSON.stringify(peer, null, 2);
-      $('peerModal').classList.remove('hidden');
-      $('peerModal').classList.add('flex');
+      $('peerModal').hidden = false;
     }
 
     function renderGeoOverrideModalList() {
@@ -1631,14 +1734,14 @@
         const vip = pick(p, 'ipv4', 'virtual_ipv4');
         const host = pick(p, 'hostname');
         const geo = resolvePeerGeo(p);
-        return `<div class="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-4 gap-2 items-center" data-override-vip="${esc(vip)}">
+        return `<div style="padding:12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line);display:grid;grid-template-columns:1fr;gap:8px" data-override-vip="${esc(vip)}">
           <div>
-            <div class="font-semibold text-slate-800 dark:text-slate-200 truncate">${esc(host)}</div>
-            <div class="font-mono text-[11px] text-slate-400">${esc(vip)}</div>
+            <div style="font-weight:600" class="truncate">${esc(host)}</div>
+            <div class="mono" style="font-size:12px;color:var(--muted)">${esc(vip)}</div>
           </div>
-          <input type="text" data-field="city" value="${esc(geo.city)}" placeholder="地区 (如 广州 / 东京)" class="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
-          <input type="text" data-field="wan_ip" value="${esc(geo.wanIp === '-' ? '' : geo.wanIp)}" placeholder="节点 WAN IP" class="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs">
-          <input type="text" data-field="coords" value="${geo.located ? `${geo.lat.toFixed(2)}, ${geo.lon.toFixed(2)}` : ''}" placeholder="纬度, 经度（留空则不上图）" class="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs">
+          <input type="text" data-field="city" value="${esc(geo.city)}" placeholder="地区 (如 广州 / 东京)" class="input">
+          <input type="text" data-field="wan_ip" value="${esc(geo.wanIp === '-' ? '' : geo.wanIp)}" placeholder="节点 WAN IP" class="input">
+          <input type="text" data-field="coords" value="${geo.located ? `${geo.lat.toFixed(2)}, ${geo.lon.toFixed(2)}` : ''}" placeholder="纬度, 经度（留空则不上图）" class="input">
         </div>`;
       }).join('');
 
@@ -1681,26 +1784,74 @@
     function renderEvents() {
       const el = $('eventsList');
       if (!el) return;
+      // 摘要行（默认折叠的唯一可见入口）+ 标题/favicon 跟随未恢复状态
+      const sorted0 = [...state.events].sort((a, b) => (b.at || 0) - (a.at || 0));
+      const unrecovered = sorted0.filter(e => {
+        if (e.type !== 'leave') return false;
+        return !sorted0.find(x => x.type === 'join' && x.at > e.at && (x.ip === e.ip || x.hostname === e.hostname));
+      });
+      const latest = sorted0[0];
+      const sumEl = $('eventsSummary'), sumTxt = $('eventsSummaryText');
+      if (sumTxt) {
+        const label0 = { join: '上线', leave: '离线', ip_change: '换 IP' };
+        sumTxt.textContent = !state.events.length
+          ? '变化事件 · 24h 内无变化'
+          : unrecovered.length
+            ? `变化事件 · 24h ${state.events.length} 条 · ${unrecovered.length} 未恢复`
+            : `变化事件 · 24h ${state.events.length} 条 · 全部已恢复 · 最近：${latest.hostname || latest.ip} ${label0[latest.type] || latest.type} ${Math.max(1, Math.round((Date.now() - latest.at) / 60000))}m 前 ▸`;
+        sumTxt.style.color = unrecovered.length ? 'var(--bad)' : '';
+      }
+      document.title = unrecovered.length ? `(${unrecovered.length}) EasyTier Hub` : 'EasyTier Hub';
+      let fav = document.querySelector('link[rel="icon"][data-et-fav]');
+      if (unrecovered.length) {
+        if (!fav) { fav = document.createElement('link'); fav.rel = 'icon'; fav.setAttribute('data-et-fav', '1'); document.head.appendChild(fav); }
+        fav.href = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="%23EF5B5B"/></svg>';
+      } else if (fav) fav.remove();
+      // 自动展开：有未恢复且用户本会话没手动收起、且不是同一事件重复展开
+      const sec = $('eventsSection');
+      if (unrecovered.length && !state.eventsManuallyCollapsed && sec && sec.hidden) {
+        const firstId = `${unrecovered[0].at}:${unrecovered[0].ip}`;
+        if (state.lastAutoExpandedEventId !== firstId) {
+          state.lastAutoExpandedEventId = firstId;
+          sec.hidden = false;
+          $('btnToggleEvents').textContent = '收起';
+          $('btnToggleEvents').setAttribute('aria-expanded', 'true');
+          if (sumEl) sumEl.setAttribute('aria-expanded', 'true');
+        }
+      }
       if (!state.events.length) {
-        el.innerHTML = '<div class="text-xs text-slate-500 dark:text-slate-400">暂无变化事件</div>';
+        el.innerHTML = '<div style="font-size:12px;color:var(--muted)">24 小时内无变化</div>';
         return;
       }
-      const label = { join: '加入', leave: '离开', ip_change: '换 IP' };
-      el.innerHTML = state.events.map(e => {
+      const label = { join: '上线', leave: '离线', ip_change: '换 IP' };
+      const sev = e => e.type === 'leave' ? 'bad' : (e.type === 'ip_change' ? 'warn' : 'ok');
+      // 配对：离线后若有同 IP/主机名的上线，则显示“离线 Xm 后恢复”；未配对的标“未恢复”并置顶
+      const sorted = [...state.events].sort((a, b) => (b.at || 0) - (a.at || 0));
+      const rows = sorted.map(e => {
+        let note = '';
+        if (e.type === 'leave') {
+          const back = sorted.find(x => x.type === 'join' && x.at > e.at && (x.ip === e.ip || x.hostname === e.hostname));
+          note = back ? `离线 ${Math.max(1, Math.round((back.at - e.at) / 60000))}m 后恢复` : '未恢复';
+        }
+        return { e, note, s: sev(e) };
+      });
+      rows.sort((a, b) => (a.note === '未恢复' ? 0 : 1) - (b.note === '未恢复' ? 0 : 1));
+      el.innerHTML = rows.slice(0, 20).map(({ e, note, s }) => {
         const t = new Date(e.at).toLocaleString('zh-CN', { hour12: false });
-        return `<div class="flex flex-wrap items-baseline gap-2 py-1.5 border-b border-slate-100 dark:border-slate-800/60 last:border-0 text-xs">
-          <span class="font-mono-num text-slate-400">${esc(t)}</span>
-          <span class="font-medium text-slate-800 dark:text-slate-200">${esc(label[e.type] || e.type)}</span>
-          <span class="font-mono-num">${esc(e.ip)}</span>
+        return `<div class="event-row">
+          <span class="ev-time">${esc(t)}</span>
+          <span class="dot" data-state="${s}"></span>
+          <span style="font-weight:600">${esc(label[e.type] || e.type)}</span>
           <span>${esc(e.hostname || '')}</span>
-          <span class="text-slate-400">上报源 ${esc(e.reporter || '')}</span>
+          <span class="num">${esc(e.ip)}</span>
+          ${note ? `<span class="${note === '未恢复' ? 'ev-unrecovered' : 'muted'}">${esc(note)}</span>` : ''}
         </div>`;
       }).join('');
     }
 
     async function tick() {
       // 互斥：上一轮没结束就不开新的一轮。
-      // 之前两处请求超时合计 8s+5s=13s > 10s 轮询周期，慢网下旧响应会覆盖新快照。
+      // 之前两处请求超时合计 8s+5s=13s > 旧 10s 轮询周期，慢网下旧响应会覆盖新快照；现周期已放宽到 30s。
       if (state.tickInFlight) return;
       state.tickInFlight = true;
       try {
@@ -1713,29 +1864,33 @@
     }
 
     async function tickOnce() {
+      // 刷新按钮已合并进 header pill（modePill），不再有独立旋转图标
       const icon = $('refreshIcon');
-      icon.classList.add('rotate-180');
-      setTimeout(() => icon.classList.remove('rotate-180'), 400);
+      if (icon) { icon.style.rotate = '180deg'; setTimeout(() => { icon.style.rotate = ''; }, 400); }
 
       // Live only: a failed fetch keeps the previous REAL payload and shows
       // an error banner. It never falls back to demo/mock data.
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 6000);
-        const r = await fetch('/api/peers', { cache: 'no-store', signal: ctrl.signal });
-        clearTimeout(timer);
-        if (r.status === 401) { location.href = '/login'; return; }
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const j = await r.json();
-        if (!j || !Array.isArray(j.reporters)) throw new Error('Invalid schema');
-        state.payload = j;
-        state.lastError = '';
-        $('errorBanner').classList.add('hidden');
-        setLiveStatus(true);
+        try {
+          const r = await fetch('/api/peers', { cache: 'no-store', signal: ctrl.signal });
+          // 之前这里在拿到响应头后就清 timer，r.json() 不受超时控制：
+          // body 卡住时 tickOnce 永远不返回，tickInFlight 一直为真，轮询永久停止。
+          // 现在 timer 直到 json 读完才清，6 秒到时 abort 会打断 body 读取。
+          if (r.status === 401) { location.href = '/login'; return; }
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const j = await r.json();
+          if (!j || !Array.isArray(j.reporters)) throw new Error('Invalid schema');
+          state.payload = j;
+          state.lastError = '';
+          $('errorBanner').hidden = true;
+          setLiveStatus(true);
+        } finally { clearTimeout(timer); }
       } catch (e) {
         state.lastError = String(e && e.message ? e.message : e);
         $('errorBannerText').textContent = `实时接口连接失败（${state.lastError}），已保留上一份真实数据，不会用演示数据代替。请检查看板鉴权或 Worker 状态后重试。`;
-        $('errorBanner').classList.remove('hidden');
+        $('errorBanner').hidden = false;
         setLiveStatus(false, '实时接口失败');
       }
 
@@ -1743,27 +1898,21 @@
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 4000);
-        const r = await fetch('/relay', { cache: 'no-store', signal: ctrl.signal });
-        clearTimeout(timer);
-        if (r.ok) state.relayHealth = await r.json();
-      } catch (e) {}
+        try {
+          const r = await fetch('/relay', { cache: 'no-store', signal: ctrl.signal });
+          if (r.ok) state.relayHealth = await r.json();
+          else state.relayHealth = null; // 失败时清零，旧 ok:true 不再一直显示绿色
+        } finally { clearTimeout(timer); }
+      } catch (e) { state.relayHealth = null; }
 
       renderDashboard();
       fetchEvents();
     }
 
     function initTheme() {
+      // 深色默认：只有明确存过 light 才加 light 类；旧存的 dark / 未存过都走默认深色，不跟随系统。
       try {
-        const saved = localStorage.getItem('et_hub_theme');
-        if (saved === 'dark') {
-          document.documentElement.classList.add('dark');
-        } else if (saved === 'light') {
-          document.documentElement.classList.remove('dark');
-        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
+        document.documentElement.classList.toggle('light', localStorage.getItem('et_hub_theme') === 'light');
       } catch (e) {}
     }
 
@@ -1792,14 +1941,14 @@
         const lat = pick(sn.peer, 'lat_ms');
         const nat = natZh(pick(sn.peer, 'nat_type'));
         tooltip.innerHTML = `
-          <div class="font-semibold text-slate-900 dark:text-white flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full" style="background:${esc(sn.color)}"></span>
+          <div style="font-weight:600;display:flex;align-items:center;gap:6px">
+            <span class="dot" style="background:${esc(sn.color)}"></span>
             ${esc(sn.displayTitle)}
           </div>
-          <div class="mt-1.5 pt-1.5 border-t border-slate-200 dark:border-slate-800 font-mono text-[11px] space-y-0.5 text-slate-600 dark:text-slate-300">
-            <div>虚拟 IP: <span class="text-indigo-600 dark:text-cyan-400 font-semibold">${esc(vip)}</span></div>
-            <div>WAN IP: <span class="text-emerald-600 dark:text-emerald-400 font-semibold">${esc(sn.geo.wanIp)}</span></div>
-            ${sn.geo.wanIpv6 ? `<div>IPv6: <span class="text-emerald-600 dark:text-emerald-400 font-semibold break-all">${esc(sn.geo.wanIpv6)}</span></div>` : ''}
+          <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--line);font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">
+            <div>虚拟 IP: <b>${esc(vip)}</b></div>
+            <div>WAN IP: <b>${esc(sn.geo.wanIp)}</b></div>
+            ${sn.geo.wanIpv6 ? `<div>IPv6: <b>${esc(sn.geo.wanIpv6)}</b></div>` : ''}
             <div>连接 / 协议: ${esc(sn.cost)} · ${esc(sn.proto)}</div>
             <div>延迟 / NAT: ${esc(lat)} ms · ${esc(nat)}</div>
           </div>
@@ -1808,7 +1957,7 @@
         const py = e.clientY - rect.top;
         tooltip.style.left = `${Math.min(rect.width - 220, Math.max(12, px + 16))}px`;
         tooltip.style.top = `${Math.min(rect.height - 110, Math.max(12, py - 20))}px`;
-        tooltip.classList.remove('hidden');
+        tooltip.hidden = false;
       };
 
       svg.addEventListener('mousedown', e => {
@@ -1832,7 +1981,7 @@
               scene.setAttribute('transform', `translate(${drag.dx.toFixed(1)} ${drag.dy.toFixed(1)})`);
             });
           }
-          tooltip.classList.add('hidden');
+          tooltip.hidden = true;
           return;
         }
 
@@ -1841,7 +1990,7 @@
         hoverRaf = requestAnimationFrame(() => {
           hoverRaf = 0;
           if (nodeEl) showTooltip(nodeEl, e);
-          else tooltip.classList.add('hidden');
+          else tooltip.hidden = true;
         });
       });
 
@@ -1903,20 +2052,40 @@
           state.mapPanX = 0;
           state.mapPanY = 0;
           document.querySelectorAll('.map-preset-btn').forEach(b => {
-            if (b.getAttribute('data-map-preset') === state.mapPreset) {
-              b.className = 'map-preset-btn px-2.5 py-1 rounded-md font-medium bg-indigo-600 text-white shadow-2xs transition-colors';
-            } else {
-              b.className = 'map-preset-btn px-2.5 py-1 rounded-md font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition-colors';
-            }
+            b.setAttribute('aria-pressed', String(b.getAttribute('data-map-preset') === state.mapPreset));
           });
           renderSvgGeoMap();
         });
       });
 
+      $('modePill').addEventListener('click', () => tick());
+      $('btnClearFilter').addEventListener('click', () => {
+        state.filter = 'all'; state.search = '';
+        $('searchInput').value = '';
+        document.querySelectorAll('.chip[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === 'all')));
+        renderPeersList();
+      });
+      const setEventsOpen = (open) => {
+        $('eventsSection').hidden = !open;
+        $('btnToggleEvents').textContent = open ? '收起' : '展开';
+        $('btnToggleEvents').setAttribute('aria-expanded', String(open));
+        $('eventsSummary').setAttribute('aria-expanded', String(open));
+      };
+      $('btnToggleEvents').addEventListener('click', () => {
+        const open = $('eventsSection').hidden;
+        if (!open) state.eventsManuallyCollapsed = true;
+        setEventsOpen(open);
+      });
+      $('eventsSummary').addEventListener('click', () => {
+        const open = $('eventsSection').hidden;
+        if (!open) state.eventsManuallyCollapsed = true;
+        setEventsOpen(open);
+      });
       $('btnToggleMap').addEventListener('click', () => {
         state.mapCollapsed = !state.mapCollapsed;
-        $('mapBodyWrap').classList.toggle('hidden', state.mapCollapsed);
+        $('mapBodyWrap').classList.toggle('collapsed', state.mapCollapsed);
         $('btnToggleMap').textContent = state.mapCollapsed ? '展开地图' : '收起地图';
+        $('btnToggleMap').setAttribute('aria-expanded', String(!state.mapCollapsed));
         if (!state.mapCollapsed) renderSvgGeoMap();
       });
     }
@@ -1930,6 +2099,10 @@
 
       renderDashboard();
       tick();
+      const kickHistory = () => fetchHistoryBuckets();
+      if ('requestIdleCallback' in window) requestIdleCallback(kickHistory, { timeout: 3000 });
+      else setTimeout(kickHistory, 1000);
+      setInterval(() => fetchHistoryBuckets(true), 5 * 60 * 1000);
 
       $('btnLogout').addEventListener('click', async () => {
         try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
@@ -1937,36 +2110,32 @@
       });
 
       $('btnTheme').addEventListener('click', () => {
-        const isDark = document.documentElement.classList.toggle('dark');
-        try { localStorage.setItem('et_hub_theme', isDark ? 'dark' : 'light'); } catch (e) {}
+        const isLight = document.documentElement.classList.toggle('light');
+        try { localStorage.setItem('et_hub_theme', isLight ? 'light' : 'dark'); } catch (e) {}
         renderSvgGeoMap();
       });
+      window.addEventListener('scroll', () => {
+        document.querySelector('.topbar')?.classList.toggle('scrolled', window.scrollY > 8);
+      }, { passive: true });
 
 
       $('btnRetryLive').addEventListener('click', () => {
         tick();
       });
 
-      $('btnRefresh').addEventListener('click', () => {
-        state.countdown = 10;
-        $('countdownText').textContent = '10s';
-        tick();
-      });
 
       $('reporterSelect').addEventListener('change', e => {
         state.selectedReporter = e.target.value;
+        state.historyBuckets = null;
         renderDashboard();
+        fetchHistoryBuckets(true);
       });
 
-      document.querySelectorAll('.filter-tab').forEach(btn => {
+      document.querySelectorAll('.chip[data-filter]').forEach(btn => {
         btn.addEventListener('click', () => {
           state.filter = btn.dataset.filter;
-          document.querySelectorAll('.filter-tab').forEach(b => {
-            if (b.dataset.filter === state.filter) {
-              b.className = 'filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-indigo-600 text-white shadow-2xs';
-            } else {
-              b.className = 'filter-tab px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-slate-100 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800';
-            }
+          document.querySelectorAll('.chip[data-filter]').forEach(b => {
+            b.setAttribute('aria-pressed', String(b === btn));
           });
           renderPeersList();
         });
@@ -1982,10 +2151,7 @@
           e.preventDefault();
           $('searchInput').focus();
         } else if (e.key === 'Escape') {
-          ['peerModal', 'geoModal'].forEach(id => {
-            $(id).classList.add('hidden');
-            $(id).classList.remove('flex');
-          });
+          ['peerModal', 'geoModal'].forEach(id => { $(id).hidden = true; });
         }
       });
 
@@ -1997,7 +2163,8 @@
         });
         th.addEventListener('click', () => {
           const col = th.dataset.sort;
-          if (state.sortCol === col) {
+          state.sortTouched = true;
+        if (state.sortCol === col) {
             state.sortAsc = !state.sortAsc;
           } else {
             state.sortCol = col;
@@ -2007,23 +2174,7 @@
         });
       });
 
-      $('btnViewTable').addEventListener('click', () => {
-        state.viewMode = 'table';
-        $('tableViewWrap').classList.remove('hidden');
-        $('cardsViewWrap').classList.add('hidden');
-        renderPeersList();
-        $('btnViewTable').className = 'px-2.5 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-2xs transition-all';
-        $('btnViewCards').className = 'px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-all';
-      });
 
-      $('btnViewCards').addEventListener('click', () => {
-        state.viewMode = 'cards';
-        $('cardsViewWrap').classList.remove('hidden');
-        $('tableViewWrap').classList.add('hidden');
-        renderPeersList();
-        $('btnViewCards').className = 'px-2.5 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-2xs transition-all';
-        $('btnViewTable').className = 'px-2.5 py-1 rounded-md text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-all';
-      });
 
       function handlePeerContainerClick(e) {
         if (e.target.closest('a')) return;
@@ -2044,14 +2195,10 @@
       $('cardsViewWrap').addEventListener('click', handlePeerContainerClick);
 
       $('btnClosePeerModal').addEventListener('click', () => {
-        $('peerModal').classList.add('hidden');
-        $('peerModal').classList.remove('flex');
+        $('peerModal').hidden = true;
       });
       $('peerModal').addEventListener('click', e => {
-        if (e.target === $('peerModal')) {
-          $('peerModal').classList.add('hidden');
-          $('peerModal').classList.remove('flex');
-        }
+        if (e.target === $('peerModal')) { $('peerModal').hidden = true; }
       });
       $('btnCopyPeerJson').addEventListener('click', () => {
         if (state.selectedPeerRaw) {
@@ -2061,18 +2208,13 @@
 
       if ($('btnOpenGeoModal')) $('btnOpenGeoModal').addEventListener('click', () => {
         renderGeoOverrideModalList();
-        $('geoModal').classList.remove('hidden');
-        $('geoModal').classList.add('flex');
+        $('geoModal').hidden = false;
       });
       $('btnCloseGeoModal').addEventListener('click', () => {
-        $('geoModal').classList.add('hidden');
-        $('geoModal').classList.remove('flex');
+        $('geoModal').hidden = true;
       });
       $('geoModal').addEventListener('click', e => {
-        if (e.target === $('geoModal')) {
-          $('geoModal').classList.add('hidden');
-          $('geoModal').classList.remove('flex');
-        }
+        if (e.target === $('geoModal')) { $('geoModal').hidden = true; }
       });
       $('btnResetGeoOverrides').addEventListener('click', () => {
         userGeoOverrides = {};
@@ -2084,13 +2226,11 @@
 
 
 
-      setInterval(() => {
-        state.countdown = state.countdown <= 1 ? 10 : state.countdown - 1;
-        $('countdownText').textContent = `${state.countdown}s`;
-        if (state.countdown === 10) {
-          tick();
-        }
-      }, 1000);
+      let pollTimer = setInterval(tick, 30000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) { clearInterval(pollTimer); }
+        else { pollTimer = setInterval(tick, 30000); tick(); }
+      });
     }
 
     if (document.readyState === 'loading') {
