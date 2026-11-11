@@ -83,6 +83,10 @@ pub const WG_TUNNEL_HEADER_SIZE: usize = std::mem::size_of::<WGTunnelHeader>();
 
 #[derive(AsBytes, FromZeroes, Copy, Clone, Debug)]
 #[repr(u8)]
+// Keep ordinary peer packet types below 64. The UDP FEC envelope reserves
+// the high two bits at this field's wire offset (byte 8) to distinguish its
+// independent frames from plain peer packets, including reordered handshakes.
+// See peers/conn/fec/wire.rs; these are not UDP transport message types.
 pub enum PacketType {
     Invalid = 0,
     Data = 1,
@@ -109,6 +113,17 @@ pub enum PacketType {
     DataWithKcpSrcModified = 18,
     DataWithQuicSrcModified = 19,
 }
+
+/// Largest expansion relative to a complete peer packet: the independent
+/// 14-byte FEC repair header and the encoded original length.
+pub const FEC_MAX_OVERHEAD: usize = 14 + 2;
+
+// The independent FEC envelope and ordinary peer packets share a discriminator
+// at byte 8. Keep these values shared with peers/conn/fec/wire.rs: UDP queue
+// admission must treat FEC frames as lossy data, not as reserved control traffic.
+pub(crate) const FEC_SOURCE_KIND: u8 = 0x40;
+pub(crate) const FEC_REPAIR_KIND: u8 = 0x80;
+pub(crate) const FEC_KIND_MASK: u8 = 0xc0;
 
 bitflags::bitflags! {
     struct PeerManagerHeaderFlags: u8 {
@@ -354,6 +369,7 @@ pub type StandardAeadTail = AeadTail<16, 12>;
 pub enum CompressorAlgo {
     None = 0,
     ZstdDefault = 1,
+    Lzo = 2,
 }
 
 impl CompressorAlgo {
@@ -361,6 +377,7 @@ impl CompressorAlgo {
         match self {
             Self::None => true,
             Self::ZstdDefault => compressor::zstd_available(),
+            Self::Lzo => cfg!(feature = "lzo"),
         }
     }
 
@@ -385,6 +402,7 @@ impl TryFrom<CompressionAlgoPb> for CompressorAlgo {
     fn try_from(value: CompressionAlgoPb) -> Result<Self, Self::Error> {
         match value {
             CompressionAlgoPb::Zstd => Ok(CompressorAlgo::ZstdDefault),
+            CompressionAlgoPb::Lzo => Ok(CompressorAlgo::Lzo),
             CompressionAlgoPb::None => Ok(CompressorAlgo::None),
             _ => Err(CompressionAlgoError(value)),
         }
@@ -397,6 +415,7 @@ impl TryFrom<CompressorAlgo> for CompressionAlgoPb {
     fn try_from(value: CompressorAlgo) -> Result<Self, Self::Error> {
         match value {
             CompressorAlgo::ZstdDefault => Ok(CompressionAlgoPb::Zstd),
+            CompressorAlgo::Lzo => Ok(CompressionAlgoPb::Lzo),
             CompressorAlgo::None => Ok(CompressionAlgoPb::None),
         }
     }
@@ -413,6 +432,7 @@ impl CompressorTail {
     pub fn get_algo(&self) -> Option<CompressorAlgo> {
         match self.algo {
             1 => Some(CompressorAlgo::ZstdDefault),
+            2 => Some(CompressorAlgo::Lzo),
             _ => None,
         }
     }
@@ -816,7 +836,14 @@ impl ZCPacket {
 
     pub fn is_lossy(&self) -> bool {
         self.peer_manager_header()
-            .map(|hdr| hdr.packet_type == PacketType::Data as u8)
+            .map(|hdr| {
+                // For FEC this byte is the envelope discriminator, not an
+                // actual peer header. No other peer fields are inspected.
+                let kind = hdr.packet_type;
+                kind == PacketType::Data as u8
+                    || kind == FEC_SOURCE_KIND
+                    || kind & FEC_KIND_MASK == FEC_REPAIR_KIND
+            })
             .unwrap_or(false)
     }
 
@@ -968,6 +995,23 @@ mod tests {
             Some(CompressorAlgo::ZstdDefault),
             CompressorTail { algo: 1 }.get_algo()
         );
+    }
+
+    #[test]
+    fn converts_lzo_compression_algo_in_every_profile() {
+        assert_eq!(
+            CompressorAlgo::Lzo,
+            CompressorAlgo::try_from(CompressionAlgoPb::Lzo).unwrap()
+        );
+        assert_eq!(
+            CompressionAlgoPb::Lzo,
+            CompressionAlgoPb::try_from(CompressorAlgo::Lzo).unwrap()
+        );
+        assert_eq!(
+            Some(CompressorAlgo::Lzo),
+            CompressorTail { algo: 2 }.get_algo()
+        );
+        assert_eq!(CompressorAlgo::Lzo.is_available(), cfg!(feature = "lzo"));
     }
 
     #[cfg(not(feature = "zstd"))]
