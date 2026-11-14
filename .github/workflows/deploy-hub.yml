@@ -98,3 +98,16 @@ jobs:
             exit 1
           fi
           echo "Worker code deployed."
+
+      - name: Smoke-test the live Hub
+        # Post-deploy health check: the Hub dashboard must answer 200.
+        # Retry a few times to ride out the seconds a fresh Worker needs
+        # to warm up; a persistent non-200 fails the job so a broken
+        # deploy is not silently green.
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 --retry 3 --retry-delay 5 https://et.yi.uy/)
+          echo "GET https://et.yi.uy/ -> HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::Hub did not answer HTTP 200 after deploy (got $code)."
+            exit 1
+          fi
