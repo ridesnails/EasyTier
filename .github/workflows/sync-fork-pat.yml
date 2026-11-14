@@ -1,0 +1,54 @@
+# NOTE: This file lives on the default branch (main) because GitHub Actions
+# only runs schedule/workflow_dispatch triggers from the default branch.
+# It operates on the easytier-hub branch (see the explicit ref: below).
+# Fork-owned sync (PAT-based) for the easytier-hub branch.
+# Uses secrets.SYNC_PAT (classic PAT, repo + workflow) so pushes can include
+# workflow-file changes. Merges upstream EasyTier/EasyTier main into the
+# easytier-hub branch. The Hub's own files live under
+# easytier-js/examples/hub/ (upstream does not touch them), and the EasyTier
+# version stays 2.7.0 on both sides, so merges are expected to be clean.
+# Runs daily; the deploy is a separate manual step (deploy-hub.yml).
+name: Fork Sync (PAT)
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 1 * * *" # daily 01:00 UTC / 09:00 CST, before the 10:54 patrol
+  workflow_dispatch:
+
+jobs:
+  sync_latest_from_upstream:
+    name: Sync latest commits from upstream repo
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
+
+    steps:
+      # Step 1: run a standard checkout action
+      - name: Checkout target repo
+        uses: actions/checkout@v5
+        with:
+          ref: easytier-hub
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      # Step 2: run the sync action
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_sync_repo: EasyTier/EasyTier
+          upstream_sync_branch: main
+          target_sync_branch: easytier-hub
+          target_repo_token: ${{ secrets.SYNC_PAT }}
+
+          # Set test_mode true to run tests instead of the true action!!
+          test_mode: false
+
+      - name: Sync check
+        if: failure()
+        run: |
+          echo "[Error] 上游同步失败，请前往仓库页面查看日志并手动处理合并冲突。"
+          echo "[Error] Upstream sync failed; check the run log and resolve any merge conflict manually."
+          exit 1
