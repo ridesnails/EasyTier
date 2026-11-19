@@ -720,7 +720,18 @@ mod tests {
         );
 
         manager.run().await.unwrap();
-        crate::foundation::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if listen_count.load(Ordering::Relaxed) >= 2
+                    && handler.accepted.lock().unwrap().as_slice() == [3]
+                {
+                    break;
+                }
+                crate::foundation::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("optional listener did not retry and accept the connection");
 
         assert!(listen_count.load(Ordering::Relaxed) >= 2);
         assert_eq!(handler.accepted.lock().unwrap().as_slice(), &[3]);
