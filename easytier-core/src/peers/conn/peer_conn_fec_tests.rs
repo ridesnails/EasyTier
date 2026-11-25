@@ -13,7 +13,10 @@ use crate::{
     foundation::time::{Duration, timeout},
     packet::{PacketType, ZCPacket},
     peers::{
-        conn::{fec, peer_session::PeerSessionStore},
+        conn::{
+            fec,
+            peer_session::{PeerSession, PeerSessionStore},
+        },
         context::NetworkIdentity,
         test_support::NoopPeerContext,
     },
@@ -33,12 +36,15 @@ struct DropFirstSource {
     sources: AtomicUsize,
     repairs: AtomicUsize,
     plain_data: AtomicUsize,
+    rpc_packets: AtomicUsize,
+    encrypted_rpc_packets: AtomicUsize,
 }
 
 impl TunnelFilter for DropFirstSource {
     type FilterOutput = ();
 
     fn before_send(&self, packet: SinkItem) -> Option<SinkItem> {
+        assert_eq!(packet.batch_len(), 1, "batch reached the transport sink");
         // Observe the independent envelope directly, without asking the
         // production parser to decide what the test should drop or count.
         match packet.tunnel_payload().get(8).copied() {
@@ -63,6 +69,12 @@ impl TunnelFilter for DropFirstSource {
                 .any(|packet_type| kind == *packet_type as u8) =>
             {
                 self.plain_data.fetch_add(1, Ordering::Relaxed);
+            }
+            Some(kind) if kind == PacketType::RpcReq as u8 => {
+                self.rpc_packets.fetch_add(1, Ordering::Relaxed);
+                if packet.peer_manager_header().unwrap().is_encrypted() {
+                    self.encrypted_rpc_packets.fetch_add(1, Ordering::Relaxed);
+                }
             }
             _ => {}
         }
@@ -266,17 +278,122 @@ async fn assert_recovery(noise: bool) {
     }
 }
 
-#[tokio::test]
+// These in-memory recovery tests use virtual time so host scheduling delays
+// cannot expire FEC state before the writer gets to send a repair.
+#[tokio::test(start_paused = true)]
 async fn legacy_handshake_enables_bidirectional_udp_recovery() {
     assert_recovery(false).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn noise_handshake_recovers_and_decrypts_original_payload() {
     assert_recovery(true).await;
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
+async fn batched_packets_are_filtered_and_delivered_as_individual_frames() {
+    let payloads: Vec<_> = (0..207u32)
+        .map(|sequence| {
+            let mut payload = vec![sequence as u8; 1024];
+            payload[..4].copy_from_slice(&sequence.to_le_bytes());
+            payload
+        })
+        .collect();
+    for (noise, relay) in [(false, false), (true, false), (false, true), (true, true)] {
+        for (enabled, tunnel_type) in [(false, "udp"), (true, "udp"), (false, "tcp")] {
+            let (client, server, filters) = connect([enabled; 2], tunnel_type, noise).await;
+            let session = Arc::new(PeerSession::new(
+                3,
+                [7; 32],
+                0,
+                0,
+                "aes-gcm".to_owned(),
+                "aes-gcm".to_owned(),
+                None,
+            ));
+            let endpoint = PeerSession::new(
+                1,
+                [7; 32],
+                0,
+                0,
+                "aes-gcm".to_owned(),
+                "aes-gcm".to_owned(),
+                None,
+            );
+            let destination = if relay { 3 } else { 2 };
+            for packet_type in [PacketType::RpcReq, PacketType::Data] {
+                let packets = payloads
+                    .iter()
+                    .map(|payload| {
+                        let mut packet = ZCPacket::new_with_payload(payload);
+                        packet.fill_peer_manager_hdr(1, destination, packet_type as u8);
+                        if relay {
+                            packet.peer_session = Some(session.clone());
+                        }
+                        packet
+                    })
+                    .collect();
+                let packet = ZCPacket::batch(packets);
+                assert_eq!(packet.batch_len(), payloads.len());
+                client.send_msg(packet).await.unwrap();
+
+                timeout(Duration::from_secs(5), async {
+                    let mut received = BTreeSet::new();
+                    for _ in &payloads {
+                        let mut packet = server
+                            .recv_next_peer_manager_packet(Some(packet_type))
+                            .await
+                            .unwrap();
+                        assert_eq!(packet.batch_len(), 1);
+                        let header = packet.peer_manager_header().unwrap();
+                        assert_eq!(header.from_peer_id.get(), 1);
+                        assert_eq!(header.to_peer_id.get(), destination);
+                        assert_eq!(header.packet_type, packet_type as u8);
+                        assert_eq!(header.is_encrypted(), relay);
+                        assert!(packet.peer_session.is_none());
+                        if relay {
+                            endpoint
+                                .decrypt_payload(1, destination, &mut packet)
+                                .unwrap();
+                        }
+                        let header = packet.peer_manager_header().unwrap();
+                        assert!(!header.is_encrypted());
+                        let sequence =
+                            u32::from_le_bytes(packet.payload()[..4].try_into().unwrap()) as usize;
+                        assert_eq!(packet.payload(), payloads[sequence]);
+                        assert!(received.insert(sequence), "duplicate fragment {sequence}");
+                    }
+                    assert_eq!(received, (0..payloads.len()).collect());
+                })
+                .await
+                .expect("batched packet delivery timed out");
+            }
+
+            let outgoing = &filters[0];
+            assert_eq!(outgoing.rpc_packets.load(Ordering::Relaxed), payloads.len());
+            assert_eq!(
+                outgoing.encrypted_rpc_packets.load(Ordering::Relaxed),
+                if noise || relay { payloads.len() } else { 0 }
+            );
+            assert_eq!(
+                outgoing.sources.load(Ordering::Relaxed),
+                if enabled { payloads.len() } else { 0 }
+            );
+            assert_eq!(
+                outgoing.plain_data.load(Ordering::Relaxed),
+                if enabled { 0 } else { payloads.len() }
+            );
+            if enabled {
+                let stats = server.get_conn_info().fec.unwrap();
+                assert_eq!(stats.rx_sources, payloads.len() as u64 - 1);
+                assert_eq!(stats.recovered, 1);
+                assert_eq!(stats.invalid_packets, 0);
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn noise_full_mtu_sources_are_encoded_and_recovered() {
     // Only the requesting endpoint reserves 16 bytes for FEC. Both endpoints
     // reserve the 28-byte AEAD tail. Exercise each full TUN size through the
@@ -309,7 +426,7 @@ async fn noise_full_mtu_sources_are_encoded_and_recovered() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn packets_larger_than_the_local_mtu_remain_protected() {
     let (client, server, filters) = connect([true, false], "udp", true).await;
     // Forwarded input need not obey this endpoint's 1300-byte TUN setting.
@@ -384,7 +501,7 @@ async fn an_endpoint_without_fec_capability_keeps_both_directions_plain() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn proxy_packet_types_require_an_explicit_flag_from_either_endpoint() {
     for (enabled, kcp, quic) in [
         (true, [false, false], [false, false]),
